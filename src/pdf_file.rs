@@ -1,31 +1,7 @@
-use std::{
-  fs::File,
-  io::{self, Read},
-  path::Path,
-  result,
-  string::FromUtf8Error,
-};
-
-#[derive(Debug)]
-pub enum Error {
-  IO(io::Error),
-  Syntax(&'static str),
-  Encoding(FromUtf8Error),
-}
-
-impl From<io::Error> for Error {
-  fn from(err: io::Error) -> Self {
-    Self::IO(err)
-  }
-}
-
-impl From<FromUtf8Error> for Error {
-  fn from(err: FromUtf8Error) -> Self {
-    Self::Encoding(err)
-  }
-}
-
-pub type Result<T> = result::Result<T, Error>;
+use crate::error::{Error, Result};
+use crate::keywords::*;
+use crate::slice_utils::last_position_of_sequence;
+use std::{fs::File, io::Read, path::Path};
 
 pub struct PdfFile {
   raw: Vec<u8>,
@@ -44,18 +20,33 @@ impl PdfFile {
   }
 
   pub fn version(&self) -> Result<String> {
-    if &self.raw[..5] != b"%PDF-" {
+    if !self.raw.starts_with(PDF_HEADER) {
       return Err(Error::Syntax("Could not find pdf header"));
     }
 
-    let end_index = match self.raw.iter().position(|&c| c == b'\n') {
-      Some(i) => i,
-      None => return Err(Error::Syntax("Could not find end of first line")),
-    };
+    let end_index = self
+      .raw
+      .iter()
+      .position(|&c| c == b'\n')
+      .ok_or(Error::Syntax("Could not find end of first line"))?;
 
-    let ver = String::from_utf8(self.raw[5..end_index].to_owned())?;
+    let ver = String::from_utf8(self.raw[PDF_HEADER.len()..end_index].to_owned())?;
 
     Ok(ver)
+  }
+
+  pub fn last_xref_offset(&self) -> Result<usize> {
+    if !self.raw.ends_with(EOF_MARKER) {
+      return Err(Error::Syntax("Could not find eof marker"));
+    }
+
+    let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD)
+      .ok_or(Error::Syntax("Could not find startxref keyword"))?;
+    let value_index = startxref_index + STARTXREF_KEYWORD.len();
+
+    let value =
+      String::from_utf8(self.raw[value_index..self.raw.len() - EOF_MARKER.len()].to_owned())?;
+    Ok(value.trim().parse()?)
   }
 }
 
@@ -74,5 +65,11 @@ mod tests {
   fn should_detect_version() {
     let file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
     assert_eq!(&file.version().unwrap(), "1.6");
+  }
+
+  #[test]
+  fn should_find_last_xref_offset() {
+    let file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
+    assert_eq!(file.last_xref_offset().unwrap(), 12596);
   }
 }
