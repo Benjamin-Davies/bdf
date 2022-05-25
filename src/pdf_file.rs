@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::keywords::*;
 use crate::slice_utils::last_position_of_sequence;
-use std::{fs::File, io::Read, path::Path};
+use std::{borrow::Cow, fs::File, io::Read, path::Path};
 
 pub struct PdfFile {
   raw: Vec<u8>,
@@ -19,7 +19,7 @@ impl PdfFile {
     Ok(Self::from_raw(buf))
   }
 
-  pub fn version(&self) -> Result<String> {
+  pub fn version(&self) -> Result<Cow<str>> {
     if !self.raw.starts_with(PDF_HEADER) {
       return Err(Error::Syntax("Could not find pdf header"));
     }
@@ -30,7 +30,7 @@ impl PdfFile {
       .position(|&c| c == b'\n')
       .ok_or(Error::Syntax("Could not find end of first line"))?;
 
-    let ver = String::from_utf8(self.raw[PDF_HEADER.len()..end_index].to_owned())?;
+    let ver = String::from_utf8_lossy(&self.raw[PDF_HEADER.len()..end_index]);
 
     Ok(ver)
   }
@@ -44,8 +44,7 @@ impl PdfFile {
       .ok_or(Error::Syntax("Could not find startxref keyword"))?;
     let value_index = startxref_index + STARTXREF_KEYWORD.len();
 
-    let value =
-      String::from_utf8(self.raw[value_index..self.raw.len() - EOF_MARKER.len()].to_owned())?;
+    let value = String::from_utf8_lossy(&self.raw[value_index..self.raw.len() - EOF_MARKER.len()]);
     Ok(value.trim().parse()?)
   }
 }
