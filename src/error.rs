@@ -1,15 +1,18 @@
+use crate::pdf_file::IndirectRef;
 use std::{io, num::ParseIntError, result};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
-  IO(io::Error),
-  Syntax(&'static str),
+  IO(String),
+  NotLoaded(&'static str),
+  ObjectNotFound(IndirectRef),
   ParseInt(ParseIntError),
+  Syntax(&'static str),
 }
 
 impl From<io::Error> for Error {
   fn from(err: io::Error) -> Self {
-    Self::IO(err)
+    Self::IO(format!("{:?}", err))
   }
 }
 
