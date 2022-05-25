@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::keywords::*;
 use crate::slice_utils::last_position_of_sequence;
+use crate::tokens;
 use std::{borrow::Cow, collections::HashMap, fs::File, io::Read, path::Path};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -50,12 +51,17 @@ impl PdfFile {
       return Err(Error::Syntax("Could not find eof marker"));
     }
 
-    let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD)
+    let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD.as_bytes())
       .ok_or(Error::Syntax("Could not find startxref keyword"))?;
-    let value_index = startxref_index + STARTXREF_KEYWORD.len();
+    let raw = &self.raw[startxref_index..];
 
-    let value = String::from_utf8_lossy(&self.raw[value_index..self.raw.len() - EOF_MARKER.len()]);
-    Ok(value.trim().parse()?)
+    let (startxref_keyword, raw) = tokens::parse_keyword(raw)?;
+    if startxref_keyword != STARTXREF_KEYWORD {
+      return Err(Error::Syntax("Could not read startxref keyword"));
+    }
+
+    let (last_xref_offset, _raw) = tokens::parse_number(raw)?;
+    Ok(last_xref_offset)
   }
 
   pub fn load_xref_table(&mut self) -> Result<()> {
@@ -64,43 +70,27 @@ impl PdfFile {
     }
 
     let xref_offset = self.last_xref_offset()?;
-    if !self.raw[xref_offset..].starts_with(XREF_KEYWORD) {
+    let raw = &self.raw[xref_offset..];
+
+    let (xref_keyword, raw) = tokens::parse_keyword(raw)?;
+    if xref_keyword != XREF_KEYWORD {
       return Err(Error::Syntax("Could not find xref keyword"));
     }
 
-    let intro_offset = xref_offset + XREF_KEYWORD.len() + 1;
-    let length_offset = intro_offset
-      + self.raw[intro_offset..]
-        .iter()
-        .position(|&c| c == b' ')
-        .ok_or(Error::Syntax("Could not find space preceeding xref length"))?
-      + 1;
-    let content_offset = intro_offset
-      + self.raw[intro_offset..]
-        .iter()
-        .position(|&c| c == b'\n')
-        .ok_or(Error::Syntax(
-          "Could not find newline preceeding xref content",
-        ))?
-      + 1;
-
-    let first_object_number: u32 = String::from_utf8_lossy(&self.raw[intro_offset..length_offset])
-      .trim()
-      .parse()?;
-    let length: u32 = String::from_utf8_lossy(&self.raw[length_offset..content_offset])
-      .trim()
-      .parse()?;
+    let (first_object_number, raw) = tokens::parse_number::<u32>(raw)?;
+    let (length, raw) = tokens::parse_number::<u32>(raw)?;
+    let ((), raw) = tokens::parse_whitespace(raw)?;
 
     let mut xref_table = HashMap::new();
     for i in 0..length {
       const LINE_LENGTH: usize = 20;
       let number = first_object_number + i;
 
-      let line_offset = content_offset + LINE_LENGTH * i as usize;
-      let line = &self.raw[line_offset..line_offset + LINE_LENGTH];
+      let line_offset = LINE_LENGTH * i as usize;
+      let line = &raw[line_offset..line_offset + LINE_LENGTH];
 
-      let object_offset = String::from_utf8_lossy(&line[0..10]).trim().parse()?;
-      let generation = String::from_utf8_lossy(&line[11..16]).trim().parse()?;
+      let object_offset = String::from_utf8_lossy(&line[0..10]).parse()?;
+      let generation = String::from_utf8_lossy(&line[11..16]).parse()?;
       let in_use = line[17] == b'n';
       xref_table.insert(
         IndirectRef { number, generation },
