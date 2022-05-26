@@ -19,12 +19,10 @@ const NUMERIC_CHARACTERS: &str = "+-.";
 #[inline]
 fn peek_char(raw: &[u8]) -> Result<char> {
   if raw.len() < 1 {
-    return Ok(' ');
+    return Err(Error::EOF);
   }
-  String::from_utf8_lossy(&raw[..1])
-    .chars()
-    .next()
-    .ok_or(Error::Syntax("Reached EOF"))
+  let c = String::from_utf8_lossy(&raw[..1]).chars().next().unwrap();
+  Ok(c)
 }
 
 pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
@@ -186,7 +184,7 @@ mod test {
   fn should_parse_name() {
     let raw = b"/Name1/ASomewhatLongerName/A;Name_With-Various***Characters?/1.2
       /$$@pattern/.notdef/Lime#20Green/paired#28#29parentheses
-      /The_Key_of_F#23_Minor/A#42";
+      /The_Key_of_F#23_Minor/A#42 ";
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, "Name1");
     let (name, raw) = parse_name(raw).unwrap();
@@ -211,7 +209,7 @@ mod test {
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0";
+    let raw = b"/one two +3 +4.0 ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name("one".into()));
     let (token, raw) = parse_token(raw).unwrap();

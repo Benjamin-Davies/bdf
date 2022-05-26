@@ -5,6 +5,7 @@ use std::result;
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
+  EOF,
   IO(String),
   NotLoaded(&'static str),
   ObjectNotFound(IndirectRef),
