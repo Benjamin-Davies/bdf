@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 
+#[derive(Debug, PartialEq)]
 pub enum Token<'a> {
   Keyword(Cow<'a, str>),
   Name(Cow<'a, str>),
@@ -13,9 +14,13 @@ pub enum Token<'a> {
 }
 
 const DELIMETER_CHARACTERS: &str = "()<>[]{}/%";
+const NUMERIC_CHARACTERS: &str = "+-.";
 
 #[inline]
 fn peek_char(raw: &[u8]) -> Result<char> {
+  if raw.len() < 1 {
+    return Ok(' ');
+  }
   String::from_utf8_lossy(&raw[..1])
     .chars()
     .next()
@@ -75,7 +80,7 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
     length += 1;
   }
 
-  if contains_escapes {
+  let name = if contains_escapes {
     let mut bytes = Vec::with_capacity(length);
     let mut i = 0;
     while i < length {
@@ -95,20 +100,48 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
     // I think that this does exactly one alloc
     // If name is valid utf8: ref, copy, move
     // If name is not valid utf8: copy, move, move
-    let name = String::from_utf8_lossy(&bytes).into_owned().into();
-    Ok((name, &raw[length..]))
+    String::from_utf8_lossy(&bytes).into_owned().into()
   } else {
-    let name = String::from_utf8_lossy(&raw[..length]);
-    Ok((name, &raw[length..]))
+    String::from_utf8_lossy(&raw[..length])
+  };
+
+  Ok((name, &raw[length..]))
+}
+
+pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
+  // TODO: move these functions to module scope
+  // and use this one in parse_token
+  let is_numeric_char = |c: char| NUMERIC_CHARACTERS.contains(c) || c.is_numeric();
+
+  ((), raw) = parse_whitespace(raw)?;
+
+  let mut contains_decimal = false;
+  let mut length = 0;
+  while is_numeric_char(peek_char(&raw[length..])?) {
+    if raw[length] == b'.' {
+      contains_decimal = true;
+    }
+
+    length += 1;
   }
+
+  let token = if contains_decimal {
+    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
+    Token::Float(number)
+  } else {
+    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
+    Token::Int(number)
+  };
+
+  Ok((token, &raw[length..]))
 }
 
 pub fn parse_token(mut raw: &[u8]) -> ParseResult<Token> {
   ((), raw) = parse_whitespace(raw)?;
 
   let first_char = peek_char(raw)?;
-  if first_char.is_alphanumeric() || "+-.".contains(first_char) {
-    todo!("parse numeric")
+  if first_char.is_numeric() || NUMERIC_CHARACTERS.contains(first_char) {
+    parse_numeric(raw)
   } else if first_char.is_alphabetic() {
     let (keyword, raw) = parse_keyword(raw)?;
     Ok((Token::Keyword(keyword), raw))
@@ -168,5 +201,24 @@ mod test {
     assert_eq!(name, ".notdef");
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, "Lime Green");
+    let (name, raw) = parse_name(raw).unwrap();
+    assert_eq!(name, "paired()parentheses");
+    let (name, raw) = parse_name(raw).unwrap();
+    assert_eq!(name, "The_Key_of_F#_Minor");
+    let (name, _raw) = parse_name(raw).unwrap();
+    assert_eq!(name, "AB");
+  }
+
+  #[test]
+  fn should_parse_token() {
+    let raw = b"/one two +3 +4.0";
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Name("one".into()));
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Keyword("two".into()));
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Int(3));
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Float(4.0));
   }
 }

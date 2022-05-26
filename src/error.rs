@@ -1,11 +1,14 @@
 use crate::pdf_file::IndirectRef;
-use std::{io, num::ParseIntError, result};
+use std::io;
+use std::num::{ParseFloatError, ParseIntError};
+use std::result;
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
   IO(String),
   NotLoaded(&'static str),
   ObjectNotFound(IndirectRef),
+  ParseFloat(ParseFloatError),
   ParseInt(ParseIntError),
   Syntax(&'static str),
 }
@@ -13,6 +16,12 @@ pub enum Error {
 impl From<io::Error> for Error {
   fn from(err: io::Error) -> Self {
     Self::IO(format!("{:?}", err))
+  }
+}
+
+impl From<ParseFloatError> for Error {
+  fn from(err: ParseFloatError) -> Self {
+    Self::ParseFloat(err)
   }
 }
 
