@@ -3,8 +3,13 @@ use std::borrow::Cow;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
+/// Every parser returns a result containing a tuple. The first element is the
+/// object that was parsed, and the second is the remaining bytes to be parsed.
 pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 
+/// A token is an object, somewhere between a character and an object in
+/// complexity. Some tokens constitute the entire object (eg. Name, Int, Float),
+/// while others are markers for the ends of objects.
 #[derive(Debug, PartialEq)]
 pub enum Token<'a> {
   Keyword(Cow<'a, str>),
@@ -13,9 +18,22 @@ pub enum Token<'a> {
   Float(f32),
 }
 
+/// Characters which "delimit syntactic entities such as arrays, names, and
+/// comments. Any of these characters terminates the entity preceding it and is
+/// not included in the entity." (Adobe, 2008, p. 13)
 const DELIMETER_CHARACTERS: &str = "()<>[]{}/%";
+
+/// Characters which may be part of a numeric object token.
 const NUMERIC_CHARACTERS: &str = "+-.";
 
+/// Returns the corresponding char for the next byte in the buffer, interpreted
+/// as utf8.
+///
+/// If the buffer is empty, then returns `Err(Error::EOF)`.
+///
+/// If the next byte is not a valid utf8 character, or it is part of a character
+/// that spans multiple bytes, then the function will return
+/// [`U+FFFD REPLACEMENT CHARACTER`][U+FFFD], which looks like this: �
 #[inline]
 fn peek_char(raw: &[u8]) -> Result<char> {
   if raw.len() < 1 {
@@ -25,13 +43,46 @@ fn peek_char(raw: &[u8]) -> Result<char> {
   Ok(c)
 }
 
+/// Returns true if the character constututes whitespace. This includes both
+/// what unicode considers whitespace, as well as comments (Adobe, 2008, p. 13).
+#[inline]
+fn is_whitespace_char(c: char) -> bool {
+  c == '%' || c.is_whitespace()
+}
+
+/// Returns true if the character is may be part of a name object token
+/// (excluding the initial `/`)
+#[inline]
+fn is_name_char(c: char) -> bool {
+  !DELIMETER_CHARACTERS.contains(c) && !is_whitespace_char(c)
+}
+
+/// Returns true if the character is may be part of a numeric object token
+/// (0-9, +, -, .)
+#[inline]
+fn is_numeric_char(c: char) -> bool {
+  NUMERIC_CHARACTERS.contains(c) || c.is_numeric()
+}
+
+/// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
 pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
-  while peek_char(raw)?.is_whitespace() {
-    raw = &raw[1..];
+  loop {
+    let next = peek_char(raw)?;
+    if next.is_whitespace() {
+      raw = &raw[1..];
+    } else if next == '%' {
+      while !"\r\n".contains(peek_char(raw)?) {
+        raw = &raw[1..];
+      }
+    } else {
+      break;
+    }
   }
+
   Ok(((), raw))
 }
 
+/// Parses a keyword, which must consist exclusively of alphabetic characters.
 pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<str>> {
   ((), raw) = parse_whitespace(raw)?;
 
@@ -45,6 +96,10 @@ pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<str>> {
   Ok((keyword, &raw[length..]))
 }
 
+/// Parses a simple integer, consisting exclusively of digits.
+///
+/// This is not used for parsing tokens, but is instead used to parse (some of)
+/// the numbers used in the trailer and xref table.
 pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseResult<I> {
   ((), raw) = parse_whitespace(raw)?;
 
@@ -58,9 +113,8 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseRes
   Ok((number, &raw[length..]))
 }
 
+/// Parses a name object (Adobe, 2008, p. 16).
 pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
-  let is_name_char = |c: char| !DELIMETER_CHARACTERS.contains(c) && !c.is_whitespace();
-
   ((), raw) = parse_whitespace(raw)?;
 
   if peek_char(raw)? != '/' {
@@ -106,11 +160,9 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
   Ok((name, &raw[length..]))
 }
 
+/// Parses a numeric object, either as an int or as a float
+/// (Adobe, 2008, p. 14).
 pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
-  // TODO: move these functions to module scope
-  // and use this one in parse_token
-  let is_numeric_char = |c: char| NUMERIC_CHARACTERS.contains(c) || c.is_numeric();
-
   ((), raw) = parse_whitespace(raw)?;
 
   let mut contains_decimal = false;
@@ -134,11 +186,12 @@ pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
   Ok((token, &raw[length..]))
 }
 
+/// Parses a token, automatically detecting its type.
 pub fn parse_token(mut raw: &[u8]) -> ParseResult<Token> {
   ((), raw) = parse_whitespace(raw)?;
 
   let first_char = peek_char(raw)?;
-  if first_char.is_numeric() || NUMERIC_CHARACTERS.contains(first_char) {
+  if is_numeric_char(first_char) {
     parse_numeric(raw)
   } else if first_char.is_alphabetic() {
     let (keyword, raw) = parse_keyword(raw)?;
@@ -163,6 +216,12 @@ mod test {
   #[test]
   fn should_parse_whitespace() {
     let ((), rest) = parse_whitespace(b" \t \r\nHello, world!").unwrap();
+    assert_eq!(rest, b"Hello, world!");
+  }
+
+  #[test]
+  fn should_parse_comments_as_whitespace() {
+    let ((), rest) = parse_whitespace(b"\r\n% A Simple Comment\nHello, world!").unwrap();
     assert_eq!(rest, b"Hello, world!");
   }
 
@@ -209,14 +268,18 @@ mod test {
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0 ";
+    let raw = b"/one two +3 +4.0 5 -.6 ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name("one".into()));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Keyword("two".into()));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Int(3));
-    let (token, _raw) = parse_token(raw).unwrap();
+    let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Float(4.0));
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Int(5));
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Float(-0.6));
   }
 }
