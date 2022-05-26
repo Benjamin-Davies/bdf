@@ -1,3 +1,8 @@
+//! TODO: Remove assumptions of unicode, except for in numeric parsing
+//!
+//! Technically we should only work with byte slices, and not utf8 strings
+//! (Adobe, 2008, p. 12). The exception is when we use built-in parsing methods.
+
 use crate::error::{Error, Result};
 use std::borrow::Cow;
 use std::num::ParseIntError;
@@ -6,17 +11,6 @@ use std::str::FromStr;
 /// Every parser returns a result containing a tuple. The first element is the
 /// object that was parsed, and the second is the remaining bytes to be parsed.
 pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
-
-/// A token is an object, somewhere between a character and an object in
-/// complexity. Some tokens constitute the entire object (eg. Name, Int, Float),
-/// while others are markers for the ends of objects.
-#[derive(Debug, PartialEq)]
-pub enum Token<'a> {
-  Keyword(Cow<'a, str>),
-  Name(Cow<'a, str>),
-  Int(usize),
-  Float(f32),
-}
 
 /// Characters which "delimit syntactic entities such as arrays, names, and
 /// comments. Any of these characters terminates the entity preceding it and is
@@ -64,6 +58,17 @@ fn is_numeric_char(c: char) -> bool {
   NUMERIC_CHARACTERS.contains(c) || c.is_numeric()
 }
 
+/// A token is an object, somewhere between a character and an object in
+/// complexity. Some tokens constitute the entire object (eg. Name, Int, Float),
+/// while others are markers for the ends of objects.
+#[derive(Debug, PartialEq)]
+pub enum Token<'a> {
+  Keyword(Cow<'a, str>),
+  Name(Cow<'a, str>),
+  Int(usize),
+  Float(f32),
+}
+
 /// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
 pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
   loop {
@@ -82,20 +87,6 @@ pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
   Ok(((), raw))
 }
 
-/// Parses a keyword, which must consist exclusively of alphabetic characters.
-pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<str>> {
-  ((), raw) = parse_whitespace(raw)?;
-
-  let mut length = 0;
-  while peek_char(&raw[length..])?.is_alphabetic() {
-    length += 1;
-  }
-
-  let keyword = String::from_utf8_lossy(&raw[..length]);
-
-  Ok((keyword, &raw[length..]))
-}
-
 /// Parses a simple integer, consisting exclusively of digits.
 ///
 /// This is not used for parsing tokens, but is instead used to parse (some of)
@@ -111,6 +102,46 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseRes
   let number = String::from_utf8_lossy(&raw[..length]).parse()?;
 
   Ok((number, &raw[length..]))
+}
+
+/// Parses a keyword, which must consist exclusively of alphabetic characters.
+pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<str>> {
+  ((), raw) = parse_whitespace(raw)?;
+
+  let mut length = 0;
+  while peek_char(&raw[length..])?.is_alphabetic() {
+    length += 1;
+  }
+
+  let keyword = String::from_utf8_lossy(&raw[..length]);
+
+  Ok((keyword, &raw[length..]))
+}
+
+/// Parses a numeric object, either as an int or as a float
+/// (Adobe, 2008, p. 14).
+pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
+  ((), raw) = parse_whitespace(raw)?;
+
+  let mut contains_decimal = false;
+  let mut length = 0;
+  while is_numeric_char(peek_char(&raw[length..])?) {
+    if raw[length] == b'.' {
+      contains_decimal = true;
+    }
+
+    length += 1;
+  }
+
+  let token = if contains_decimal {
+    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
+    Token::Float(number)
+  } else {
+    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
+    Token::Int(number)
+  };
+
+  Ok((token, &raw[length..]))
 }
 
 /// Parses a name object (Adobe, 2008, p. 16).
@@ -158,32 +189,6 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
   };
 
   Ok((name, &raw[length..]))
-}
-
-/// Parses a numeric object, either as an int or as a float
-/// (Adobe, 2008, p. 14).
-pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
-  ((), raw) = parse_whitespace(raw)?;
-
-  let mut contains_decimal = false;
-  let mut length = 0;
-  while is_numeric_char(peek_char(&raw[length..])?) {
-    if raw[length] == b'.' {
-      contains_decimal = true;
-    }
-
-    length += 1;
-  }
-
-  let token = if contains_decimal {
-    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
-    Token::Float(number)
-  } else {
-    let number = String::from_utf8_lossy(&raw[..length]).parse()?;
-    Token::Int(number)
-  };
-
-  Ok((token, &raw[length..]))
 }
 
 /// Parses a token, automatically detecting its type.
