@@ -17,8 +17,8 @@ pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 pub enum Token<'a> {
   Keyword(Cow<'a, [u8]>),
   Name(Cow<'a, [u8]>),
-  Int(usize),
-  Float(f32),
+  Integer(usize),
+  Real(f32),
 }
 
 /// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
@@ -83,10 +83,10 @@ pub fn parse_numeric(raw: &[u8]) -> ParseResult<Token> {
 
   let token = if contains_decimal {
     let number = String::from_utf8_lossy(&raw[..length]).parse()?;
-    Token::Float(number)
+    Token::Real(number)
   } else {
     let number = String::from_utf8_lossy(&raw[..length]).parse()?;
-    Token::Int(number)
+    Token::Integer(number)
   };
 
   Ok((token, &raw[length..]))
@@ -223,12 +223,12 @@ mod test {
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Keyword(Cow::Borrowed(b"two")));
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Int(3));
+    assert_eq!(token, Token::Integer(3));
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Float(4.0));
+    assert_eq!(token, Token::Real(4.0));
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Int(5));
+    assert_eq!(token, Token::Integer(5));
     let (token, _raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Float(-0.6));
+    assert_eq!(token, Token::Real(-0.6));
   }
 }
