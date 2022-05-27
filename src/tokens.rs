@@ -22,6 +22,10 @@ pub enum Token<'a> {
   LiteralString(Cow<'a, [u8]>),
   HexadecimalString(Cow<'a, [u8]>),
   Name(Cow<'a, [u8]>),
+  BeginArray,
+  EndArray,
+  BeginDictionary,
+  EndDictionary,
 }
 
 /// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
@@ -313,11 +317,22 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
   } else if first_char == b'<' {
     let second_char = peek_char(&raw[1..])?;
     if second_char == b'<' {
-      todo!()
+      Ok((Token::BeginDictionary, &raw[2..]))
     } else {
       let (string, raw) = parse_hexadecimal_string(raw)?;
       Ok((Token::HexadecimalString(string), raw))
     }
+  } else if first_char == b'>' {
+    let second_char = peek_char(&raw[1..])?;
+    if second_char == b'>' {
+      Ok((Token::EndDictionary, &raw[2..]))
+    } else {
+      Err(Error::Syntax("Expected a second '>'"))
+    }
+  } else if first_char == b'[' {
+    Ok((Token::BeginArray, &raw[1..]))
+  } else if first_char == b']' {
+    Ok((Token::EndArray, &raw[1..]))
   } else {
     Err(Error::Syntax("Unrecognised token"))
   }
@@ -445,7 +460,7 @@ mod test {
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) <8> ";
+    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) <8> [ ] << >> ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
@@ -460,7 +475,15 @@ mod test {
     assert_eq!(token, Token::Real(-0.6));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::LiteralString(Cow::Borrowed(b"seven (7)")));
-    let (token, _raw) = parse_token(raw).unwrap();
+    let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::HexadecimalString(Cow::Borrowed(&[0x80])));
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::BeginArray);
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::EndArray);
+    let (token, raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::BeginDictionary);
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::EndDictionary);
   }
 }
