@@ -58,6 +58,7 @@ pub fn is_numeric_char(c: u8) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use paste::paste;
 
   #[test]
   fn should_peek_char() {
@@ -66,98 +67,24 @@ mod tests {
     assert_eq!(peek_char(b""), Err(Error::EOF));
   }
 
-  #[test]
-  fn should_detect_whitespace_char() {
-    assert_eq!(is_whitespace_char(0), true);
-    assert_eq!(is_whitespace_char(b'\t'), true);
-    assert_eq!(is_whitespace_char(b'\n'), true);
-    assert_eq!(is_whitespace_char(0x0C), true);
-    assert_eq!(is_whitespace_char(b'\r'), true);
-    assert_eq!(is_whitespace_char(b' '), true);
-    assert_eq!(is_whitespace_char(b'/'), false);
-    assert_eq!(is_whitespace_char(b'#'), false);
-    assert_eq!(is_whitespace_char(b'H'), false);
-    assert_eq!(is_whitespace_char(b'i'), false);
-    assert_eq!(is_whitespace_char(b'2'), false);
-    assert_eq!(is_whitespace_char(b'0'), false);
-    assert_eq!(is_whitespace_char(b'+'), false);
-    assert_eq!(is_whitespace_char(b'-'), false);
-    assert_eq!(is_whitespace_char(b'.'), false);
+  macro_rules! char_detection_test {
+    ($type:ident, $should_match:literal) => {
+      paste! {
+        #[test]
+        fn [<should_detect_ $type _char>]() {
+          let matches:Vec<u8> = CHARS_TO_TEST.iter().filter(|&&c| [<is_ $type _char>](c)).cloned().collect();
+          let matches = String::from_utf8_lossy(&matches);
+          assert_eq!(matches, $should_match);
+        }
+      }
+    };
   }
 
-  #[test]
-  fn should_detect_newline_char() {
-    assert_eq!(is_newline_char(0), false);
-    assert_eq!(is_newline_char(b'\t'), false);
-    assert_eq!(is_newline_char(b'\n'), true);
-    assert_eq!(is_newline_char(0x0C), false);
-    assert_eq!(is_newline_char(b'\r'), true);
-    assert_eq!(is_newline_char(b' '), false);
-    assert_eq!(is_newline_char(b'/'), false);
-    assert_eq!(is_newline_char(b'#'), false);
-    assert_eq!(is_newline_char(b'H'), false);
-    assert_eq!(is_newline_char(b'i'), false);
-    assert_eq!(is_newline_char(b'2'), false);
-    assert_eq!(is_newline_char(b'0'), false);
-    assert_eq!(is_newline_char(b'+'), false);
-    assert_eq!(is_newline_char(b'-'), false);
-    assert_eq!(is_newline_char(b'.'), false);
-  }
+  const CHARS_TO_TEST: &[u8] = b"\0\t\n\x0C\r /Hi#20+-.";
 
-  #[test]
-  fn should_detect_alphabetic_char() {
-    assert_eq!(is_alphabetic_char(0), false);
-    assert_eq!(is_alphabetic_char(b'\t'), false);
-    assert_eq!(is_alphabetic_char(b'\n'), false);
-    assert_eq!(is_alphabetic_char(0x0C), false);
-    assert_eq!(is_alphabetic_char(b'\r'), false);
-    assert_eq!(is_alphabetic_char(b' '), false);
-    assert_eq!(is_alphabetic_char(b'/'), false);
-    assert_eq!(is_alphabetic_char(b'#'), false);
-    assert_eq!(is_alphabetic_char(b'H'), true);
-    assert_eq!(is_alphabetic_char(b'i'), true);
-    assert_eq!(is_alphabetic_char(b'2'), false);
-    assert_eq!(is_alphabetic_char(b'0'), false);
-    assert_eq!(is_alphabetic_char(b'+'), false);
-    assert_eq!(is_alphabetic_char(b'-'), false);
-    assert_eq!(is_alphabetic_char(b'.'), false);
-  }
-
-  #[test]
-  fn should_detect_name_char() {
-    assert_eq!(is_name_char(0), false);
-    assert_eq!(is_name_char(b'\t'), false);
-    assert_eq!(is_name_char(b'\n'), false);
-    assert_eq!(is_name_char(0x0C), false);
-    assert_eq!(is_name_char(b'\r'), false);
-    assert_eq!(is_name_char(b' '), false);
-    assert_eq!(is_name_char(b'/'), false);
-    assert_eq!(is_name_char(b'#'), true);
-    assert_eq!(is_name_char(b'H'), true);
-    assert_eq!(is_name_char(b'i'), true);
-    assert_eq!(is_name_char(b'2'), true);
-    assert_eq!(is_name_char(b'0'), true);
-    assert_eq!(is_name_char(b'+'), true);
-    assert_eq!(is_name_char(b'-'), true);
-    assert_eq!(is_name_char(b'.'), true);
-  }
-
-  #[test]
-  fn should_detect_numeric_char() {
-    assert_eq!(is_numeric_char(0), false);
-    assert_eq!(is_numeric_char(b'\t'), false);
-    assert_eq!(is_numeric_char(b'\n'), false);
-    assert_eq!(is_numeric_char(0x0C), false);
-    assert_eq!(is_numeric_char(b'\r'), false);
-    assert_eq!(is_numeric_char(b' '), false);
-    assert_eq!(is_numeric_char(b'/'), false);
-    assert_eq!(is_numeric_char(b'#'), false);
-    assert_eq!(is_numeric_char(b'H'), false);
-    assert_eq!(is_numeric_char(b'i'), false);
-    assert_eq!(is_numeric_char(b'2'), true);
-    assert_eq!(is_numeric_char(b'0'), true);
-    assert_eq!(is_numeric_char(b'+'), true);
-    assert_eq!(is_numeric_char(b'-'), true);
-    assert_eq!(is_numeric_char(b'.'), true);
-  }
+  char_detection_test!(whitespace, "\0\t\n\x0C\r ");
+  char_detection_test!(newline, "\n\r");
+  char_detection_test!(alphabetic, "Hi");
+  char_detection_test!(name, "Hi#20+-.");
+  char_detection_test!(numeric, "20+-.");
 }
