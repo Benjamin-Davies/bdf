@@ -2,6 +2,8 @@ use crate::chars::{
   is_alphabetic_char, is_name_char, is_newline_char, is_numeric_char, is_whitespace_char, peek_char,
 };
 use crate::error::{Error, Result};
+use crate::keywords::{ENDSTREAM_KEYWORD, STREAM_KEYWORD};
+use crate::slice_utils::position_of_sequence;
 use std::borrow::Cow;
 use std::cmp::min;
 use std::num::ParseIntError;
@@ -26,6 +28,7 @@ pub enum Token<'a> {
   EndArray,
   BeginDictionary,
   EndDictionary,
+  Stream(&'a [u8]),
 }
 
 /// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
@@ -298,6 +301,31 @@ pub fn parse_name(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   Ok((name, &raw[length..]))
 }
 
+/// Parses to the end of a stream, starting with the newline that follows the
+/// 'stream' keyword (Adobe, 2008, p. 19).
+pub fn parse_to_end_of_stream(mut raw: &[u8]) -> ParseResult<&[u8]> {
+  // Parse the EOL following the 'stream' keyword
+  match peek_char(raw)? {
+    b'\n' => raw = &raw[1..],
+    b'\r' => match peek_char(&raw[1..])? {
+      b'\n' => raw = &raw[2..],
+      _ => {
+        return Err(Error::Syntax(
+          "'stream' keyword must not be followed by just a CR",
+        ))
+      }
+    },
+    _ => return Err(Error::Syntax("'stream' keyword must be followed by an EOL")),
+  }
+
+  // Find the end of the stream
+  if let Some(length) = position_of_sequence(raw, ENDSTREAM_KEYWORD) {
+    Ok((&raw[..length], &raw[length + ENDSTREAM_KEYWORD.len()..]))
+  } else {
+    Err(Error::EOF)
+  }
+}
+
 /// Parses a token, automatically detecting its type.
 pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
   let ((), raw) = parse_whitespace(raw)?;
@@ -307,7 +335,12 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
     parse_numeric(raw)
   } else if is_alphabetic_char(first_char) {
     let (keyword, raw) = parse_keyword(raw)?;
-    Ok((Token::Keyword(keyword), raw))
+    if keyword == Cow::Borrowed(STREAM_KEYWORD) {
+      let (stream, raw) = parse_to_end_of_stream(raw)?;
+      Ok((Token::Stream(stream), raw))
+    } else {
+      Ok((Token::Keyword(keyword), raw))
+    }
   } else if first_char == b'/' {
     let (name, raw) = parse_name(raw)?;
     Ok((Token::Name(name), raw))
@@ -460,7 +493,7 @@ mod test {
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) <8> [ ] << >> ";
+    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) <8> [ ] << >> stream\ntesting\nendstream ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
@@ -483,7 +516,9 @@ mod test {
     assert_eq!(token, Token::EndArray);
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::BeginDictionary);
-    let (token, _raw) = parse_token(raw).unwrap();
+    let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::EndDictionary);
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::Stream(b"testing\n"));
   }
 }
