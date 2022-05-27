@@ -1,3 +1,4 @@
+pub mod chars;
 pub mod error;
 pub mod keywords;
 pub mod pdf_file;

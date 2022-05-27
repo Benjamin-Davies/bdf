@@ -51,7 +51,7 @@ impl PdfFile {
       return Err(Error::Syntax("Could not find eof marker"));
     }
 
-    let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD.as_bytes())
+    let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD)
       .ok_or(Error::Syntax("Could not find startxref keyword"))?;
     let raw = &self.raw[startxref_index..];
 

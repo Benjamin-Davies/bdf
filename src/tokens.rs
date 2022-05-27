@@ -1,8 +1,6 @@
-//! TODO: Remove assumptions of unicode, except for in numeric parsing
-//!
-//! Technically we should only work with byte slices, and not utf8 strings
-//! (Adobe, 2008, p. 12). The exception is when we use built-in parsing methods.
-
+use crate::chars::{
+  is_alphabetic_char, is_name_char, is_newline_char, is_numeric_char, is_whitespace_char, peek_char,
+};
 use crate::error::{Error, Result};
 use std::borrow::Cow;
 use std::num::ParseIntError;
@@ -12,59 +10,13 @@ use std::str::FromStr;
 /// object that was parsed, and the second is the remaining bytes to be parsed.
 pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 
-/// Characters which "delimit syntactic entities such as arrays, names, and
-/// comments. Any of these characters terminates the entity preceding it and is
-/// not included in the entity." (Adobe, 2008, p. 13)
-const DELIMETER_CHARACTERS: &str = "()<>[]{}/%";
-
-/// Characters which may be part of a numeric object token.
-const NUMERIC_CHARACTERS: &str = "+-.";
-
-/// Returns the corresponding char for the next byte in the buffer, interpreted
-/// as utf8.
-///
-/// If the buffer is empty, then returns `Err(Error::EOF)`.
-///
-/// If the next byte is not a valid utf8 character, or it is part of a character
-/// that spans multiple bytes, then the function will return
-/// [`U+FFFD REPLACEMENT CHARACTER`][U+FFFD], which looks like this: �
-#[inline]
-fn peek_char(raw: &[u8]) -> Result<char> {
-  if raw.len() < 1 {
-    return Err(Error::EOF);
-  }
-  let c = String::from_utf8_lossy(&raw[..1]).chars().next().unwrap();
-  Ok(c)
-}
-
-/// Returns true if the character constututes whitespace. This includes both
-/// what unicode considers whitespace, as well as comments (Adobe, 2008, p. 13).
-#[inline]
-fn is_whitespace_char(c: char) -> bool {
-  c == '%' || c.is_whitespace()
-}
-
-/// Returns true if the character is may be part of a name object token
-/// (excluding the initial `/`)
-#[inline]
-fn is_name_char(c: char) -> bool {
-  !DELIMETER_CHARACTERS.contains(c) && !is_whitespace_char(c)
-}
-
-/// Returns true if the character is may be part of a numeric object token
-/// (0-9, +, -, .)
-#[inline]
-fn is_numeric_char(c: char) -> bool {
-  NUMERIC_CHARACTERS.contains(c) || c.is_numeric()
-}
-
 /// A token is an object, somewhere between a character and an object in
 /// complexity. Some tokens constitute the entire object (eg. Name, Int, Float),
 /// while others are markers for the ends of objects.
 #[derive(Debug, PartialEq)]
 pub enum Token<'a> {
-  Keyword(Cow<'a, str>),
-  Name(Cow<'a, str>),
+  Keyword(Cow<'a, [u8]>),
+  Name(Cow<'a, [u8]>),
   Int(usize),
   Float(f32),
 }
@@ -73,10 +25,10 @@ pub enum Token<'a> {
 pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
   loop {
     let next = peek_char(raw)?;
-    if next.is_whitespace() {
+    if is_whitespace_char(next) {
       raw = &raw[1..];
-    } else if next == '%' {
-      while !"\r\n".contains(peek_char(raw)?) {
+    } else if next == b'%' {
+      while !is_newline_char(peek_char(raw)?) {
         raw = &raw[1..];
       }
     } else {
@@ -87,7 +39,7 @@ pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
   Ok(((), raw))
 }
 
-/// Parses a simple integer, consisting exclusively of digits.
+/// Parses an integer.
 ///
 /// This is not used for parsing tokens, but is instead used to parse (some of)
 /// the numbers used in the trailer and xref table.
@@ -95,7 +47,7 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseRes
   ((), raw) = parse_whitespace(raw)?;
 
   let mut length = 0;
-  while peek_char(&raw[length..])?.is_numeric() {
+  while is_numeric_char(peek_char(&raw[length..])?) {
     length += 1;
   }
 
@@ -105,15 +57,15 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseRes
 }
 
 /// Parses a keyword, which must consist exclusively of alphabetic characters.
-pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<str>> {
+pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   ((), raw) = parse_whitespace(raw)?;
 
   let mut length = 0;
-  while peek_char(&raw[length..])?.is_alphabetic() {
+  while is_alphabetic_char(peek_char(&raw[length..])?) {
     length += 1;
   }
 
-  let keyword = String::from_utf8_lossy(&raw[..length]);
+  let keyword = raw[..length].into();
 
   Ok((keyword, &raw[length..]))
 }
@@ -145,10 +97,10 @@ pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
 }
 
 /// Parses a name object (Adobe, 2008, p. 16).
-pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
+pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   ((), raw) = parse_whitespace(raw)?;
 
-  if peek_char(raw)? != '/' {
+  if peek_char(raw)? != b'/' {
     return Err(Error::Syntax("Name must start with a '/'"));
   }
   raw = &raw[1..];
@@ -179,13 +131,9 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<str>> {
         }
       }
     }
-
-    // I think that this does exactly one alloc
-    // If name is valid utf8: ref, copy, move
-    // If name is not valid utf8: copy, move, move
-    String::from_utf8_lossy(&bytes).into_owned().into()
+    bytes.into()
   } else {
-    String::from_utf8_lossy(&raw[..length])
+    raw[..length].into()
   };
 
   Ok((name, &raw[length..]))
@@ -198,10 +146,10 @@ pub fn parse_token(mut raw: &[u8]) -> ParseResult<Token> {
   let first_char = peek_char(raw)?;
   if is_numeric_char(first_char) {
     parse_numeric(raw)
-  } else if first_char.is_alphabetic() {
+  } else if is_alphabetic_char(first_char) {
     let (keyword, raw) = parse_keyword(raw)?;
     Ok((Token::Keyword(keyword), raw))
-  } else if first_char == '/' {
+  } else if first_char == b'/' {
     let (name, raw) = parse_name(raw)?;
     Ok((Token::Name(name), raw))
   } else {
@@ -215,7 +163,7 @@ mod test {
 
   #[test]
   fn should_peek_char() {
-    assert_eq!(peek_char(b"Hello, world!").unwrap(), 'H');
+    assert_eq!(peek_char(b"Hello, world!").unwrap(), b'H');
   }
 
   #[test]
@@ -233,7 +181,7 @@ mod test {
   #[test]
   fn should_parse_keyword() {
     let (keyword, rest) = parse_keyword(b"  keyword  ").unwrap();
-    assert_eq!(keyword, "keyword");
+    assert_eq!(keyword, Cow::Borrowed(b"keyword"));
     assert_eq!(rest, b"  ");
   }
 
@@ -250,34 +198,34 @@ mod test {
       /$$@pattern/.notdef/Lime#20Green/paired#28#29parentheses
       /The_Key_of_F#23_Minor/A#42 ";
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "Name1");
+    assert_eq!(name, Cow::Borrowed(b"Name1"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "ASomewhatLongerName");
+    assert_eq!(name, Cow::Borrowed(b"ASomewhatLongerName"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "A;Name_With-Various***Characters?");
+    assert_eq!(name, Cow::Borrowed(b"A;Name_With-Various***Characters?"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "1.2");
+    assert_eq!(name, Cow::Borrowed(b"1.2"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "$$@pattern");
+    assert_eq!(name, Cow::Borrowed(b"$$@pattern"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, ".notdef");
+    assert_eq!(name, Cow::Borrowed(b".notdef"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "Lime Green");
+    assert_eq!(name, Cow::Borrowed(b"Lime Green"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "paired()parentheses");
+    assert_eq!(name, Cow::Borrowed(b"paired()parentheses"));
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "The_Key_of_F#_Minor");
+    assert_eq!(name, Cow::Borrowed(b"The_Key_of_F#_Minor"));
     let (name, _raw) = parse_name(raw).unwrap();
-    assert_eq!(name, "AB");
+    assert_eq!(name, Cow::Borrowed(b"AB"));
   }
 
   #[test]
   fn should_parse_token() {
     let raw = b"/one two +3 +4.0 5 -.6 ";
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Name("one".into()));
+    assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Keyword("two".into()));
+    assert_eq!(token, Token::Keyword(Cow::Borrowed(b"two")));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Int(3));
     let (token, raw) = parse_token(raw).unwrap();
