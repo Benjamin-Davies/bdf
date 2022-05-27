@@ -20,6 +20,7 @@ pub enum Token<'a> {
   Integer(usize),
   Real(f32),
   LiteralString(Cow<'a, [u8]>),
+  HexadecimalString(Cow<'a, [u8]>),
   Name(Cow<'a, [u8]>),
 }
 
@@ -205,6 +206,53 @@ pub fn parse_literal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   Ok((string, &raw[length..]))
 }
 
+/// Parses a hexadecimal string (Adobe, 2008, p. 15-16).
+pub fn parse_hexadecimal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
+  if raw[0] != b'<' {
+    return Err(Error::Syntax("Hexadecimal String must start with '<'"));
+  }
+
+  let length = raw
+    .iter()
+    .position(|&c| c == b'>')
+    .ok_or(Error::Syntax("Hexadecimal String must end with '>'"))?
+    + 1;
+
+  let mut last = None;
+  let mut hex = &raw[1..length - 1];
+  let mut bytes = Vec::new();
+  while hex.len() > 0 {
+    ((), hex) = parse_whitespace(hex)?;
+
+    if let Ok(c) = peek_char(hex) {
+      match last {
+        None => {
+          last = Some(c);
+        }
+        Some(l) => {
+          let slice = [l, c];
+          let hex_for_byte = String::from_utf8_lossy(&slice);
+          bytes.push(u8::from_str_radix(&hex_for_byte, 16)?);
+
+          last = None;
+        }
+      }
+
+      hex = &hex[1..];
+    }
+  }
+
+  // If there is a digit left over, pretend there is an additional zero
+  if let Some(l) = last {
+    let slice = [l, b'0'];
+    let hex_for_byte = String::from_utf8_lossy(&slice);
+    bytes.push(u8::from_str_radix(&hex_for_byte, 16)?);
+  }
+
+  let string = bytes.into();
+  Ok((string, &raw[length..]))
+}
+
 /// Parses a name object (Adobe, 2008, p. 16).
 pub fn parse_name(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if peek_char(raw)? != b'/' {
@@ -262,6 +310,14 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
   } else if first_char == b'(' {
     let (string, raw) = parse_literal_string(raw)?;
     Ok((Token::LiteralString(string), raw))
+  } else if first_char == b'<' {
+    let second_char = peek_char(&raw[1..])?;
+    if second_char == b'<' {
+      todo!()
+    } else {
+      let (string, raw) = parse_hexadecimal_string(raw)?;
+      Ok((Token::HexadecimalString(string), raw))
+    }
   } else {
     Err(Error::Syntax("Unrecognised token"))
   }
@@ -275,11 +331,6 @@ mod test {
     ($left:expr, $right:expr $(,)?) => {
       assert_eq!($left, Cow::Borrowed($right));
     };
-  }
-
-  #[test]
-  fn should_peek_char() {
-    assert_eq!(peek_char(b"Hello, world!").unwrap(), b'H');
   }
 
   #[test]
@@ -357,6 +408,13 @@ mod test {
   }
 
   #[test]
+  fn should_parse_hexadecimal_string() {
+    let raw = b"<486 56C 6C6 F2C 206 1707>";
+    let (string, _raw) = parse_hexadecimal_string(raw).unwrap();
+    assert_eq_cow!(String::from_utf8_lossy(&string), "Hello, app");
+  }
+
+  #[test]
   fn should_parse_name() {
     let raw = b"/Name1/ASomewhatLongerName/A;Name_With-Various***Characters?/1.2 ";
     let (name, raw) = parse_name(raw).unwrap();
@@ -387,7 +445,7 @@ mod test {
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) ";
+    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) <8> ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
@@ -400,7 +458,9 @@ mod test {
     assert_eq!(token, Token::Integer(5));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Real(-0.6));
-    let (token, _raw) = parse_token(raw).unwrap();
+    let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::LiteralString(Cow::Borrowed(b"seven (7)")));
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::HexadecimalString(Cow::Borrowed(&[0x80])));
   }
 }
