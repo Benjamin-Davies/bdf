@@ -43,8 +43,8 @@ pub fn parse_whitespace(mut raw: &[u8]) -> ParseResult<()> {
 ///
 /// This is not used for parsing tokens, but is instead used to parse (some of)
 /// the numbers used in the trailer and xref table.
-pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseResult<I> {
-  ((), raw) = parse_whitespace(raw)?;
+pub fn parse_number<I: FromStr<Err = ParseIntError>>(raw: &[u8]) -> ParseResult<I> {
+  let ((), raw) = parse_whitespace(raw)?;
 
   let mut length = 0;
   while is_numeric_char(peek_char(&raw[length..])?) {
@@ -57,9 +57,7 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(mut raw: &[u8]) -> ParseRes
 }
 
 /// Parses a keyword, which must consist exclusively of alphabetic characters.
-pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
-  ((), raw) = parse_whitespace(raw)?;
-
+pub fn parse_keyword(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   let mut length = 0;
   while is_alphabetic_char(peek_char(&raw[length..])?) {
     length += 1;
@@ -72,9 +70,7 @@ pub fn parse_keyword(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
 
 /// Parses a numeric object, either as an int or as a float
 /// (Adobe, 2008, p. 14).
-pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
-  ((), raw) = parse_whitespace(raw)?;
-
+pub fn parse_numeric(raw: &[u8]) -> ParseResult<Token> {
   let mut contains_decimal = false;
   let mut length = 0;
   while is_numeric_char(peek_char(&raw[length..])?) {
@@ -97,13 +93,11 @@ pub fn parse_numeric(mut raw: &[u8]) -> ParseResult<Token> {
 }
 
 /// Parses a name object (Adobe, 2008, p. 16).
-pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
-  ((), raw) = parse_whitespace(raw)?;
-
+pub fn parse_name(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if peek_char(raw)? != b'/' {
     return Err(Error::Syntax("Name must start with a '/'"));
   }
-  raw = &raw[1..];
+  let raw = &raw[1..];
 
   let mut contains_escapes = false;
   let mut length = 0;
@@ -140,8 +134,8 @@ pub fn parse_name(mut raw: &[u8]) -> ParseResult<Cow<[u8]>> {
 }
 
 /// Parses a token, automatically detecting its type.
-pub fn parse_token(mut raw: &[u8]) -> ParseResult<Token> {
-  ((), raw) = parse_whitespace(raw)?;
+pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
+  let ((), raw) = parse_whitespace(raw)?;
 
   let first_char = peek_char(raw)?;
   if is_numeric_char(first_char) {
@@ -180,7 +174,7 @@ mod test {
 
   #[test]
   fn should_parse_keyword() {
-    let (keyword, rest) = parse_keyword(b"  keyword  ").unwrap();
+    let (keyword, rest) = parse_keyword(b"keyword  ").unwrap();
     assert_eq!(keyword, Cow::Borrowed(b"keyword"));
     assert_eq!(rest, b"  ");
   }
@@ -194,25 +188,27 @@ mod test {
 
   #[test]
   fn should_parse_name() {
-    let raw = b"/Name1/ASomewhatLongerName/A;Name_With-Various***Characters?/1.2
-      /$$@pattern/.notdef/Lime#20Green/paired#28#29parentheses
-      /The_Key_of_F#23_Minor/A#42 ";
+    let raw = b"/Name1/ASomewhatLongerName/A;Name_With-Various***Characters?/1.2 ";
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"Name1"));
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"ASomewhatLongerName"));
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"A;Name_With-Various***Characters?"));
-    let (name, raw) = parse_name(raw).unwrap();
+    let (name, _raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"1.2"));
+
+    let raw = b"/$$@pattern/.notdef/Lime#20Green/paired#28#29parentheses ";
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"$$@pattern"));
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b".notdef"));
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"Lime Green"));
-    let (name, raw) = parse_name(raw).unwrap();
+    let (name, _raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"paired()parentheses"));
+
+    let raw = b"/The_Key_of_F#23_Minor/A#42 ";
     let (name, raw) = parse_name(raw).unwrap();
     assert_eq!(name, Cow::Borrowed(b"The_Key_of_F#_Minor"));
     let (name, _raw) = parse_name(raw).unwrap();
