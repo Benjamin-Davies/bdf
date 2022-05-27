@@ -72,7 +72,11 @@ mod tests {
       paste! {
         #[test]
         fn [<should_detect_ $type _char>]() {
-          let matches:Vec<u8> = CHARS_TO_TEST.iter().filter(|&&c| [<is_ $type _char>](c)).cloned().collect();
+          let matches: Vec<u8> = CHARS_TO_TEST
+            .iter()
+            .filter(|&&c| [<is_ $type _char>](c))
+            .cloned()
+            .collect();
           let matches = String::from_utf8_lossy(&matches);
           assert_eq!(matches, $should_match);
         }
