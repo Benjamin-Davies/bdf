@@ -3,6 +3,7 @@ use crate::chars::{
 };
 use crate::error::{Error, Result};
 use std::borrow::Cow;
+use std::cmp::min;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
@@ -16,9 +17,10 @@ pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 #[derive(Debug, PartialEq)]
 pub enum Token<'a> {
   Keyword(Cow<'a, [u8]>),
-  Name(Cow<'a, [u8]>),
   Integer(usize),
   Real(f32),
+  LiteralString(Cow<'a, [u8]>),
+  Name(Cow<'a, [u8]>),
 }
 
 /// Parses a block of whitespace, including comments (Adobe, 2008, p. 13).
@@ -92,6 +94,117 @@ pub fn parse_numeric(raw: &[u8]) -> ParseResult<Token> {
   Ok((token, &raw[length..]))
 }
 
+/// Parses an escape sequence, such as those that may occur in a literal string
+/// (Adobe, 2008, p. 15).
+pub fn parse_escape_sequence(raw: &[u8]) -> ParseResult<Option<u8>> {
+  if peek_char(raw)? != b'\\' {
+    return Err(Error::Syntax("Escape Sequence must start with a '\\'"));
+  }
+
+  // First try parsing an octal escape sequence
+  let first_non_octal_position = raw
+    .iter()
+    .skip(1)
+    .take(3)
+    .position(|&c| c < b'0' || c >= b'8');
+  if first_non_octal_position != Some(0) {
+    let digit_count = match first_non_octal_position {
+      Some(n) => n,
+      None => min(3, raw.len() - 1),
+    };
+    let octal = String::from_utf8_lossy(&raw[1..1 + digit_count]);
+    let byte = u8::from_str_radix(&octal, 8)?;
+    return Ok((Some(byte), &raw[1 + digit_count..]));
+  }
+
+  let c = peek_char(&raw[1..])?;
+  let (result, length) = match c {
+    b'n' => (Some(b'\n'), 2),
+    b'r' => (Some(b'\n'), 2),
+    b't' => (Some(b'\t'), 2),
+    // BACKSPACE (BS)
+    b'b' => (Some(0x08), 2),
+    // FORM FEED (FF)
+    b'f' => (Some(0x0C), 2),
+    b'(' | b')' | b'\\' => (Some(c), 2),
+    b'\n' => (None, 2),
+    b'\r' => (
+      Some(b'\n'),
+      if peek_char(&raw[2..]) == Ok(b'\n') {
+        3
+      } else {
+        2
+      },
+    ),
+    _ => {
+      return Err(Error::Syntax("Invalid escape sequence"));
+    }
+  };
+
+  Ok((result, &raw[length..]))
+}
+
+/// Parses a literal string (Adobe, 2008, p. 15-16).
+pub fn parse_literal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
+  if raw[0] != b'(' {
+    return Err(Error::Syntax("Literal String must start with '('"));
+  }
+
+  let mut length = 1;
+  let mut depth = 1;
+  let mut requires_extra_processing = false;
+
+  while depth > 0 {
+    match peek_char(&raw[length..])? {
+      b'(' => depth += 1,
+      b')' => depth -= 1,
+      b'\\' => {
+        requires_extra_processing = true;
+        length += 1;
+      }
+      b'\r' => {
+        requires_extra_processing = true;
+      }
+      _ => {}
+    }
+    length += 1;
+  }
+
+  let string = if requires_extra_processing {
+    let mut raw = &raw[1..length - 1];
+    let mut bytes = Vec::with_capacity(length);
+
+    while raw.len() > 0 {
+      match raw[0] {
+        b'\\' => {
+          let (result, next) = parse_escape_sequence(raw)?;
+          if let Some(c) = result {
+            bytes.push(c);
+          }
+          raw = next;
+        }
+        b'\r' => {
+          bytes.push(b'\n');
+          raw = &raw[1..];
+          if peek_char(raw) == Ok(b'\n') {
+            raw = &raw[1..];
+          }
+        }
+        _ => {
+          bytes.push(raw[0]);
+          raw = &raw[1..];
+        }
+      }
+    }
+
+    bytes.into()
+  } else {
+    raw[1..length - 1].into()
+  };
+
+  Ok((string, &raw[length..]))
+}
+
 /// Parses a name object (Adobe, 2008, p. 16).
 pub fn parse_name(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if peek_char(raw)? != b'/' {
@@ -146,6 +259,9 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
   } else if first_char == b'/' {
     let (name, raw) = parse_name(raw)?;
     Ok((Token::Name(name), raw))
+  } else if first_char == b'(' {
+    let (string, raw) = parse_literal_string(raw)?;
+    Ok((Token::LiteralString(string), raw))
   } else {
     Err(Error::Syntax("Unrecognised token"))
   }
@@ -154,6 +270,12 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
 #[cfg(test)]
 mod test {
   use super::*;
+
+  macro_rules! assert_eq_cow {
+    ($left:expr, $right:expr $(,)?) => {
+      assert_eq!($left, Cow::Borrowed($right));
+    };
+  }
 
   #[test]
   fn should_peek_char() {
@@ -175,7 +297,7 @@ mod test {
   #[test]
   fn should_parse_keyword() {
     let (keyword, rest) = parse_keyword(b"keyword  ").unwrap();
-    assert_eq!(keyword, Cow::Borrowed(b"keyword"));
+    assert_eq_cow!(keyword, b"keyword");
     assert_eq!(rest, b"  ");
   }
 
@@ -187,37 +309,85 @@ mod test {
   }
 
   #[test]
+  fn should_parse_literal_string() {
+    const TEST_CASES: &[(&[u8], &str)] = &[
+      (b"(This is a string)", "This is a string"),
+      (
+        b"(Strings may contain newlines\nas such.)",
+        "Strings may contain newlines\nas such.",
+      ),
+      (
+        b"(Strings may contain balanced parentheses () and\r\nspecial characters (*!&}^% and so on).)",
+        "Strings may contain balanced parentheses () and\nspecial characters (*!&}^% and so on).",
+      ),
+      (
+        b"(The following is an empty string.)",
+        "The following is an empty string.",
+      ),
+      (
+        b"()",
+        "",
+      ),
+      (
+        b"(It has zero (0) length.)",
+        "It has zero (0) length.",
+      ),
+      (
+        b"(These \\\ntwo strings \\\nare the same.)",
+        "These two strings are the same.",
+      ),
+      (
+        b"(This string has and end-of-line at the end of it.\n)",
+        "This string has and end-of-line at the end of it.\n",
+      ),
+      (
+        b"(\\0533)",
+        "+3",
+      ),
+      (
+        b"(\\53)",
+        "+",
+      ),
+    ];
+
+    for (raw, expected) in TEST_CASES {
+      let (string, _raw) = parse_literal_string(raw).unwrap();
+      assert_eq!(String::from_utf8_lossy(&string), Cow::Borrowed(*expected));
+    }
+  }
+
+  #[test]
   fn should_parse_name() {
     let raw = b"/Name1/ASomewhatLongerName/A;Name_With-Various***Characters?/1.2 ";
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"Name1"));
+    assert_eq_cow!(name, b"Name1");
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"ASomewhatLongerName"));
+    assert_eq_cow!(name, b"ASomewhatLongerName");
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"A;Name_With-Various***Characters?"));
+    assert_eq_cow!(name, b"A;Name_With-Various***Characters?");
     let (name, _raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"1.2"));
+    assert_eq_cow!(name, b"1.2");
 
     let raw = b"/$$@pattern/.notdef/Lime#20Green/paired#28#29parentheses ";
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"$$@pattern"));
+    assert_eq_cow!(name, b"$$@pattern");
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b".notdef"));
+    assert_eq_cow!(name, b".notdef");
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"Lime Green"));
+    assert_eq_cow!(name, b"Lime Green");
     let (name, _raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"paired()parentheses"));
+    assert_eq_cow!(name, b"paired()parentheses");
 
     let raw = b"/The_Key_of_F#23_Minor/A#42 ";
     let (name, raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"The_Key_of_F#_Minor"));
+    assert_eq_cow!(name, b"The_Key_of_F#_Minor");
     let (name, _raw) = parse_name(raw).unwrap();
-    assert_eq!(name, Cow::Borrowed(b"AB"));
+    assert_eq_cow!(name, b"AB");
   }
 
   #[test]
   fn should_parse_token() {
-    let raw = b"/one two +3 +4.0 5 -.6 ";
+    let raw = b"/one two +3 +4.0 5 -.6 (seven (7)) ";
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
@@ -228,7 +398,9 @@ mod test {
     assert_eq!(token, Token::Real(4.0));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Integer(5));
-    let (token, _raw) = parse_token(raw).unwrap();
+    let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Real(-0.6));
+    let (token, _raw) = parse_token(raw).unwrap();
+    assert_eq!(token, Token::LiteralString(Cow::Borrowed(b"seven (7)")));
   }
 }
