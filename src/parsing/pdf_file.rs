@@ -1,6 +1,5 @@
 use crate::error::{Error, Result};
-use crate::objects::IndirectRef;
-use crate::objects::Object;
+use crate::objects::{IndirectRef, Object};
 use crate::parsing::keywords::*;
 use crate::parsing::objects::parse_object_until_keyword;
 use crate::parsing::tokens;
@@ -120,6 +119,47 @@ impl PdfFile {
 
         Ok(obj)
     }
+
+    pub fn resolve<'a>(&'a self, object: &'a Object<'a>) -> Result<Cow<'a, Object<'a>>> {
+        let reference = if let &Object::Indirect(ind) = object {
+            ind
+        } else {
+            return Ok(Cow::Borrowed(object));
+        };
+
+        let offset = self.indirect_object_offset(reference)?;
+        let raw = &self.raw[offset..];
+
+        let (number, raw) = tokens::parse_number::<u32>(raw)?;
+        if number != reference.number {
+            return Err(Error::Syntax(
+                "Object number does not match number in xref table",
+                format!("{} vs. {}", number, reference.number),
+            ));
+        }
+
+        let (generation, raw) = tokens::parse_number::<u16>(raw)?;
+        if generation != reference.generation {
+            return Err(Error::Syntax(
+                "Object generation number does not match generation in xref table",
+                format!("{} vs. {}", generation, reference.generation),
+            ));
+        }
+
+        let ((), raw) = tokens::parse_whitespace(raw)?;
+        let (obj_keyword, raw) = tokens::parse_keyword(raw)?;
+        if obj_keyword != OBJ_KEYWORD {
+            eprintln!("{}", String::from_utf8_lossy(raw));
+            return Err(Error::Syntax(
+                "Could not find obj keyword",
+                String::from_utf8_lossy(obj_keyword).into(),
+            ));
+        }
+
+        let (obj, _raw) = parse_object_until_keyword(raw, ENDOBJ_KEYWORD)?;
+
+        Ok(Cow::Owned(obj))
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +231,31 @@ mod tests {
             trailer[b"Info"],
             Object::Indirect(IndirectRef {
                 number: 19,
+                generation: 0
+            })
+        );
+    }
+
+    #[test]
+    fn should_parse_page_definition() {
+        let mut file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
+        file.load_xref_table().unwrap();
+
+        let trailer = file.trailer().unwrap();
+        assert_ne!(trailer, Object::Null);
+
+        let root = file.resolve(&trailer[b"Root"]).unwrap();
+        assert_eq!(root[b"Type"], Object::Name(Cow::Borrowed(b"Catalog")));
+
+        let pages = file.resolve(&root[b"Pages"]).unwrap();
+        assert_eq!(pages[b"Type"], Object::Name(Cow::Borrowed(b"Pages")));
+
+        let page = file.resolve(&pages[b"Kids"].index_array(0)).unwrap();
+        assert_eq!(page[b"Type"], Object::Name(Cow::Borrowed(b"Page")));
+        assert_eq!(
+            page[b"Contents"],
+            Object::Indirect(IndirectRef {
+                number: 2,
                 generation: 0
             })
         );

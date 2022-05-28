@@ -8,7 +8,7 @@ pub struct IndirectRef {
     pub generation: u16,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Object<'a> {
     Boolean(bool),
     Integer(usize),
@@ -28,6 +28,16 @@ impl<'a> Index<&'a [u8]> for Object<'a> {
     fn index(&self, index: &'a [u8]) -> &Object<'a> {
         if let Object::Dictionary(dict) = self {
             dict.get(&Cow::Borrowed(index)).unwrap_or(&Object::Null)
+        } else {
+            &Object::Null
+        }
+    }
+}
+
+impl<'a> Object<'a> {
+    pub fn index_array(&self, index: usize) -> &Object<'a> {
+        if let Object::Array(array) = self {
+            &array.get(index).unwrap_or(&Object::Null)
         } else {
             &Object::Null
         }
