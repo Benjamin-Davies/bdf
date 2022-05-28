@@ -1,10 +1,10 @@
 use crate::error::{Error, Result};
-use crate::keywords::*;
-use crate::objects::parse_object_until_keyword;
 use crate::objects::IndirectRef;
 use crate::objects::Object;
-use crate::slice_utils::last_position_of_sequence;
-use crate::tokens;
+use crate::parsing::keywords::*;
+use crate::parsing::objects::parse_object_until_keyword;
+use crate::parsing::tokens;
+use crate::utils::slices::last_position_of_sequence;
 use std::{borrow::Cow, collections::HashMap, fs::File, io::Read, path::Path};
 
 pub struct PdfFile {

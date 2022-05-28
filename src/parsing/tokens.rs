@@ -1,9 +1,9 @@
-use crate::chars::{
+use crate::error::{Error, Result};
+use crate::parsing::keywords::{ENDSTREAM_KEYWORD, STREAM_KEYWORD};
+use crate::utils::chars::{
   is_alphabetic_char, is_name_char, is_newline_char, is_numeric_char, is_whitespace_char, peek_char,
 };
-use crate::error::{Error, Result};
-use crate::keywords::{ENDSTREAM_KEYWORD, STREAM_KEYWORD};
-use crate::slice_utils::position_of_sequence;
+use crate::utils::slices::position_of_sequence;
 use std::borrow::Cow;
 use std::cmp::min;
 use std::num::ParseIntError;
