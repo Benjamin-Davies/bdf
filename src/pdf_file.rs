@@ -1,14 +1,9 @@
 use crate::error::{Error, Result};
 use crate::keywords::*;
+use crate::objects::IndirectRef;
 use crate::slice_utils::last_position_of_sequence;
 use crate::tokens;
 use std::{borrow::Cow, collections::HashMap, fs::File, io::Read, path::Path};
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub struct IndirectRef {
-    pub number: u32,
-    pub generation: u16,
-}
 
 pub struct PdfFile {
     raw: Vec<u8>,

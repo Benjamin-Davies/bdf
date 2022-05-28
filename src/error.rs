@@ -1,4 +1,4 @@
-use crate::pdf_file::IndirectRef;
+use crate::objects::IndirectRef;
 use std::io;
 use std::num::{ParseFloatError, ParseIntError};
 use std::result;

@@ -18,9 +18,9 @@ pub type ParseResult<'a, T> = Result<(T, &'a [u8])>;
 /// while others are markers for the ends of objects.
 #[derive(Debug, PartialEq)]
 pub enum Token<'a> {
-  Keyword(Cow<'a, [u8]>),
+  Keyword(&'a [u8]),
   Integer(usize),
-  Real(f32),
+  Real(f64),
   LiteralString(Cow<'a, [u8]>),
   HexadecimalString(Cow<'a, [u8]>),
   Name(Cow<'a, [u8]>),
@@ -67,15 +67,13 @@ pub fn parse_number<I: FromStr<Err = ParseIntError>>(raw: &[u8]) -> ParseResult<
 }
 
 /// Parses a keyword, which must consist exclusively of alphabetic characters.
-pub fn parse_keyword(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
+pub fn parse_keyword(raw: &[u8]) -> ParseResult<&[u8]> {
   let mut length = 0;
   while is_alphabetic_char(peek_char(&raw[length..])?) {
     length += 1;
   }
 
-  let keyword = raw[..length].into();
-
-  Ok((keyword, &raw[length..]))
+  Ok((&raw[..length], &raw[length..]))
 }
 
 /// Parses a numeric object, either as an int or as a float
@@ -335,7 +333,7 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
     parse_numeric(raw)
   } else if is_alphabetic_char(first_char) {
     let (keyword, raw) = parse_keyword(raw)?;
-    if keyword == Cow::Borrowed(STREAM_KEYWORD) {
+    if keyword == STREAM_KEYWORD {
       let (stream, raw) = parse_to_end_of_stream(raw)?;
       Ok((Token::Stream(stream), raw))
     } else {
@@ -396,7 +394,7 @@ mod test {
   #[test]
   fn should_parse_keyword() {
     let (keyword, rest) = parse_keyword(b"keyword  ").unwrap();
-    assert_eq_cow!(keyword, b"keyword");
+    assert_eq!(keyword, b"keyword");
     assert_eq!(rest, b"  ");
   }
 
@@ -497,7 +495,7 @@ mod test {
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Name(Cow::Borrowed(b"one")));
     let (token, raw) = parse_token(raw).unwrap();
-    assert_eq!(token, Token::Keyword(Cow::Borrowed(b"two")));
+    assert_eq!(token, Token::Keyword(b"two"));
     let (token, raw) = parse_token(raw).unwrap();
     assert_eq!(token, Token::Integer(3));
     let (token, raw) = parse_token(raw).unwrap();
