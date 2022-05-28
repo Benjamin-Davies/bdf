@@ -179,40 +179,20 @@ mod tests {
         let file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
         let trailer = file.trailer().unwrap();
 
-        let mut expected = HashMap::<Cow<[u8]>, Object>::new();
-        expected.insert(Cow::Borrowed(b"Size"), Object::Integer(20));
-        expected.insert(
-            Cow::Borrowed(b"Root"),
+        assert_eq!(trailer[b"Size"], Object::Integer(20));
+        assert_eq!(
+            trailer[b"Root"],
             Object::Indirect(IndirectRef {
                 number: 18,
-                generation: 0,
-            }),
+                generation: 0
+            })
         );
-        expected.insert(
-            Cow::Borrowed(b"Info"),
+        assert_eq!(
+            trailer[b"Info"],
             Object::Indirect(IndirectRef {
                 number: 19,
-                generation: 0,
-            }),
+                generation: 0
+            })
         );
-        expected.insert(
-            Cow::Borrowed(b"ID"),
-            Object::Array(vec![
-                Object::String(Cow::Borrowed(&[
-                    0x67, 0x2D, 0xFA, 0x4F, 0x7E, 0xF7, 0x2C, 0x74, 0x08, 0xCF, 0x44, 0xB9, 0x85,
-                    0x04, 0x9C, 0x31,
-                ])),
-                Object::String(Cow::Borrowed(&[
-                    0x67, 0x2D, 0xFA, 0x4F, 0x7E, 0xF7, 0x2C, 0x74, 0x08, 0xCF, 0x44, 0xB9, 0x85,
-                    0x04, 0x9C, 0x31,
-                ])),
-            ]),
-        );
-        expected.insert(
-            Cow::Borrowed(b"DocChecksum"),
-            Object::Name(Cow::Borrowed(b"55569C181E425D18F7ED4931B469769A")),
-        );
-
-        assert_eq!(trailer, Object::Dictionary(expected));
     }
 }

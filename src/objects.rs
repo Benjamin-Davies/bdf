@@ -2,6 +2,7 @@ use crate::error::Error;
 use crate::tokens::{parse_token, ParseResult, Token};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Index;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct IndirectRef {
@@ -21,6 +22,18 @@ pub enum Object<'a> {
     Stream(HashMap<Cow<'a, [u8]>, Object<'a>>, &'a [u8]),
     Null,
     Indirect(IndirectRef),
+}
+
+impl<'a> Index<&'a [u8]> for Object<'a> {
+    type Output = Object<'a>;
+
+    fn index(&self, index: &'a [u8]) -> &Object<'a> {
+        if let Object::Dictionary(dict) = self {
+            dict.get(&Cow::Borrowed(index)).unwrap_or(&Object::Null)
+        } else {
+            &Object::Null
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -196,6 +209,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn should_index_into_dictionary() {
+        let dict = Object::Dictionary({
+            let mut dict = HashMap::<Cow<[u8]>, Object>::new();
+            dict.insert(Cow::Borrowed(b"Name"), Object::Boolean(true));
+            dict
+        });
+
+        assert_eq!(dict[b"Name"], Object::Boolean(true));
+        assert_eq!(dict[b"NotFound"], Object::Null);
+        assert_eq!(Object::Null[b"NotFound"], Object::Null);
+    }
+
+    #[test]
     fn should_parse_boolean() {
         let (obj, _raw) = parse_object_until_keyword(b"true end ", b"end").unwrap();
         assert_eq!(obj, Object::Boolean(true));
@@ -267,37 +293,26 @@ mod tests {
                     >> end ";
         let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
 
-        let mut expected = HashMap::<Cow<[u8]>, Object>::new();
-        expected.insert(
-            Cow::Borrowed(b"Type"),
-            Object::Name(Cow::Borrowed(b"Example")),
+        assert_eq!(obj[b"Type"], Object::Name(Cow::Borrowed(b"Example")));
+        assert_eq!(
+            obj[b"Subtype"],
+            Object::Name(Cow::Borrowed(b"DictionaryExample"))
         );
-        expected.insert(
-            Cow::Borrowed(b"Subtype"),
-            Object::Name(Cow::Borrowed(b"DictionaryExample")),
+        assert_eq!(obj[b"Version"], Object::Real(0.01));
+        assert_eq!(obj[b"IntegerItem"], Object::Integer(12));
+        assert_eq!(
+            obj[b"StringItem"],
+            Object::String(Cow::Borrowed(b"a string"))
         );
-        expected.insert(Cow::Borrowed(b"Version"), Object::Real(0.01));
-        expected.insert(Cow::Borrowed(b"IntegerItem"), Object::Integer(12));
-        expected.insert(
-            Cow::Borrowed(b"StringItem"),
-            Object::String(Cow::Borrowed(b"a string")),
-        );
-        expected.insert(Cow::Borrowed(b"Subdictionary"), {
-            let mut subdict = HashMap::<Cow<[u8]>, Object>::new();
-            subdict.insert(Cow::Borrowed(b"Item1"), Object::Real(0.4));
-            subdict.insert(Cow::Borrowed(b"Item2"), Object::Boolean(true));
-            subdict.insert(
-                Cow::Borrowed(b"LastItem"),
-                Object::String(Cow::Borrowed(b"not!")),
-            );
-            subdict.insert(
-                Cow::Borrowed(b"VeryLastItem"),
-                Object::String(Cow::Borrowed(b"OK")),
-            );
-            Object::Dictionary(subdict)
-        });
 
-        assert_eq!(obj, Object::Dictionary(expected));
+        let subdict = &obj[b"Subdictionary"];
+        assert_eq!(subdict[b"Item1"], Object::Real(0.4));
+        assert_eq!(subdict[b"Item2"], Object::Boolean(true));
+        assert_eq!(subdict[b"LastItem"], Object::String(Cow::Borrowed(b"not!")));
+        assert_eq!(
+            subdict[b"VeryLastItem"],
+            Object::String(Cow::Borrowed(b"OK"))
+        );
     }
 
     #[test]
