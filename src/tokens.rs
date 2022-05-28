@@ -104,7 +104,10 @@ pub fn parse_numeric(raw: &[u8]) -> ParseResult<Token> {
 /// (Adobe, 2008, p. 15).
 pub fn parse_escape_sequence(raw: &[u8]) -> ParseResult<Option<u8>> {
   if peek_char(raw)? != b'\\' {
-    return Err(Error::Syntax("Escape Sequence must start with a '\\'"));
+    return Err(Error::Syntax(
+      "Escape Sequence must start with a '\\'",
+      String::from_utf8_lossy(&raw[..5]).into(),
+    ));
   }
 
   // First try parsing an octal escape sequence
@@ -143,7 +146,10 @@ pub fn parse_escape_sequence(raw: &[u8]) -> ParseResult<Option<u8>> {
       },
     ),
     _ => {
-      return Err(Error::Syntax("Invalid escape sequence"));
+      return Err(Error::Syntax(
+        "Invalid escape sequence",
+        String::from_utf8_lossy(&raw[..5]).into(),
+      ));
     }
   };
 
@@ -153,7 +159,10 @@ pub fn parse_escape_sequence(raw: &[u8]) -> ParseResult<Option<u8>> {
 /// Parses a literal string (Adobe, 2008, p. 15-16).
 pub fn parse_literal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if raw[0] != b'(' {
-    return Err(Error::Syntax("Literal String must start with '('"));
+    return Err(Error::Syntax(
+      "Literal String must start with '('",
+      String::from_utf8_lossy(&raw[..5]).into(),
+    ));
   }
 
   let mut length = 1;
@@ -214,13 +223,16 @@ pub fn parse_literal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
 /// Parses a hexadecimal string (Adobe, 2008, p. 15-16).
 pub fn parse_hexadecimal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if raw[0] != b'<' {
-    return Err(Error::Syntax("Hexadecimal String must start with '<'"));
+    return Err(Error::Syntax(
+      "Hexadecimal String must start with '<'",
+      String::from_utf8_lossy(&raw[..5]).into(),
+    ));
   }
 
-  let length = raw
-    .iter()
-    .position(|&c| c == b'>')
-    .ok_or(Error::Syntax("Hexadecimal String must end with '>'"))?
+  let length = raw.iter().position(|&c| c == b'>').ok_or(Error::Syntax(
+    "Hexadecimal String must end with '>'",
+    String::from_utf8_lossy(&raw[..5]).into(),
+  ))?
     + 1;
 
   let mut last = None;
@@ -261,7 +273,10 @@ pub fn parse_hexadecimal_string(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
 /// Parses a name object (Adobe, 2008, p. 16).
 pub fn parse_name(raw: &[u8]) -> ParseResult<Cow<[u8]>> {
   if peek_char(raw)? != b'/' {
-    return Err(Error::Syntax("Name must start with a '/'"));
+    return Err(Error::Syntax(
+      "Name must start with a '/'",
+      String::from_utf8_lossy(&raw[..5]).into(),
+    ));
   }
   let raw = &raw[1..];
 
@@ -310,10 +325,16 @@ pub fn parse_to_end_of_stream(mut raw: &[u8]) -> ParseResult<&[u8]> {
       _ => {
         return Err(Error::Syntax(
           "'stream' keyword must not be followed by just a CR",
+          String::from_utf8_lossy(&raw[..5]).into(),
         ))
       }
     },
-    _ => return Err(Error::Syntax("'stream' keyword must be followed by an EOL")),
+    _ => {
+      return Err(Error::Syntax(
+        "'stream' keyword must be followed by an EOL",
+        String::from_utf8_lossy(&raw[..5]).into(),
+      ))
+    }
   }
 
   // Find the end of the stream
@@ -358,14 +379,20 @@ pub fn parse_token(raw: &[u8]) -> ParseResult<Token> {
     if second_char == b'>' {
       Ok((Token::EndDictionary, &raw[2..]))
     } else {
-      Err(Error::Syntax("Expected a second '>'"))
+      Err(Error::Syntax(
+        "Expected a second '>'",
+        String::from_utf8_lossy(&raw[..5]).into(),
+      ))
     }
   } else if first_char == b'[' {
     Ok((Token::BeginArray, &raw[1..]))
   } else if first_char == b']' {
     Ok((Token::EndArray, &raw[1..]))
   } else {
-    Err(Error::Syntax("Unrecognised token"))
+    Err(Error::Syntax(
+      "Unrecognised token",
+      String::from_utf8_lossy(&raw[..5]).into(),
+    ))
   }
 }
 

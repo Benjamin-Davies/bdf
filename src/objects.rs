@@ -51,6 +51,7 @@ pub fn parse_object_until_keyword<'a>(
                 } else {
                     return Err(Error::Syntax(
                         "Encountered end keyword without reading a full object",
+                        "".into(),
                     ));
                 };
             }
@@ -79,7 +80,7 @@ pub fn parse_object_until_keyword<'a>(
                         .iter()
                         .rev()
                         .position(|e| e == &BeginArray)
-                        .ok_or(Error::Syntax("Could not find start of array"))?;
+                        .ok_or(Error::Syntax("Could not find start of array", "".into()))?;
                 // Pop the array elements, in the right order
                 let entries = stack.drain(start..);
                 // Then unwrap them into objects
@@ -88,7 +89,7 @@ pub fn parse_object_until_keyword<'a>(
                     if let Obj(object) = entry {
                         array.push(object);
                     } else {
-                        return Err(Error::Syntax("Unrecognized token inside array"));
+                        return Err(Error::Syntax("Unrecognized token inside array", "".into()));
                     }
                 }
                 // Pop the BeginArray
@@ -106,7 +107,10 @@ pub fn parse_object_until_keyword<'a>(
                         .iter()
                         .rev()
                         .position(|e| e == &BeginDictionary)
-                        .ok_or(Error::Syntax("Could not find start of dictionary"))?;
+                        .ok_or(Error::Syntax(
+                            "Could not find start of dictionary",
+                            format!("{:?}", stack),
+                        ))?;
                 // Pop the dictionary elements, in the right order
                 let mut entries = stack.drain(start..);
                 // Then unwrap them into key/value pairs
@@ -116,13 +120,19 @@ pub fn parse_object_until_keyword<'a>(
                     let key = if let Obj(Object::Name(key)) = entry {
                         key
                     } else {
-                        return Err(Error::Syntax("Unrecognized token inside dictionary"));
+                        return Err(Error::Syntax(
+                            "Misplaced token inside dictionary",
+                            format!("{:?}", entry),
+                        ));
                     };
 
                     let value = if let Some(Obj(value)) = entries.next() {
                         value
                     } else {
-                        return Err(Error::Syntax("Could not find value in dictionary"));
+                        return Err(Error::Syntax(
+                            "Could not find value in dictionary",
+                            "".into(),
+                        ));
                     };
 
                     dict.insert(key, value);
@@ -142,7 +152,7 @@ pub fn parse_object_until_keyword<'a>(
                 if let Some(Obj(Object::Dictionary(dict))) = stack.pop() {
                     stack.push(Obj(Object::Stream(dict, stream)));
                 } else {
-                    return Err(Error::Syntax("Could not find stream dictionary"));
+                    return Err(Error::Syntax("Could not find stream dictionary", "".into()));
                 }
             }
 
@@ -163,12 +173,20 @@ pub fn parse_object_until_keyword<'a>(
                         generation: generation as u16,
                     })));
                 } else {
-                    return Err(Error::Syntax("Could not find integers for indirect object"));
+                    return Err(Error::Syntax(
+                        "Could not find integers for indirect object",
+                        "".into(),
+                    ));
                 }
             }
 
             // Other
-            Token::Keyword(_) => return Err(Error::Syntax("Unrecognized keyword")),
+            Token::Keyword(keyword) => {
+                return Err(Error::Syntax(
+                    "Unrecognized keyword",
+                    String::from_utf8_lossy(keyword).into(),
+                ))
+            }
         }
     }
 }

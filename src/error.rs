@@ -11,7 +11,7 @@ pub enum Error {
     ObjectNotFound(IndirectRef),
     ParseFloat(ParseFloatError),
     ParseInt(ParseIntError),
-    Syntax(&'static str),
+    Syntax(&'static str, String),
 }
 
 impl From<io::Error> for Error {

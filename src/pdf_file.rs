@@ -1,6 +1,8 @@
 use crate::error::{Error, Result};
 use crate::keywords::*;
+use crate::objects::parse_object_until_keyword;
 use crate::objects::IndirectRef;
+use crate::objects::Object;
 use crate::slice_utils::last_position_of_sequence;
 use crate::tokens;
 use std::{borrow::Cow, collections::HashMap, fs::File, io::Read, path::Path};
@@ -27,14 +29,14 @@ impl PdfFile {
 
     pub fn version(&self) -> Result<Cow<str>> {
         if !self.raw.starts_with(PDF_HEADER) {
-            return Err(Error::Syntax("Could not find pdf header"));
+            return Err(Error::Syntax("Could not find pdf header", "".into()));
         }
 
         let end_index = self
             .raw
             .iter()
             .position(|&c| c == b'\n')
-            .ok_or(Error::Syntax("Could not find end of first line"))?;
+            .ok_or(Error::Syntax("Could not find end of first line", "".into()))?;
 
         let ver = String::from_utf8_lossy(&self.raw[PDF_HEADER.len()..end_index]);
 
@@ -43,16 +45,16 @@ impl PdfFile {
 
     pub fn last_xref_offset(&self) -> Result<usize> {
         if !self.raw.ends_with(EOF_MARKER) {
-            return Err(Error::Syntax("Could not find eof marker"));
+            return Err(Error::Syntax("Could not find eof marker", "".into()));
         }
 
         let startxref_index = last_position_of_sequence(&self.raw, STARTXREF_KEYWORD)
-            .ok_or(Error::Syntax("Could not find startxref keyword"))?;
+            .ok_or(Error::Syntax("Could not find startxref keyword", "".into()))?;
         let raw = &self.raw[startxref_index..];
 
         let (startxref_keyword, raw) = tokens::parse_keyword(raw)?;
         if startxref_keyword != STARTXREF_KEYWORD {
-            return Err(Error::Syntax("Could not read startxref keyword"));
+            return Err(Error::Syntax("Could not read startxref keyword", "".into()));
         }
 
         let (last_xref_offset, _raw) = tokens::parse_number(raw)?;
@@ -69,7 +71,7 @@ impl PdfFile {
 
         let (xref_keyword, raw) = tokens::parse_keyword(raw)?;
         if xref_keyword != XREF_KEYWORD {
-            return Err(Error::Syntax("Could not find xref keyword"));
+            return Err(Error::Syntax("Could not find xref keyword", "".into()));
         }
 
         let (first_object_number, raw) = tokens::parse_number::<u32>(raw)?;
@@ -107,6 +109,16 @@ impl PdfFile {
             .get(&reference)
             .ok_or(Error::ObjectNotFound(reference))?
             .ok_or(Error::ObjectNotFound(reference))
+    }
+
+    pub fn trailer(&self) -> Result<Object> {
+        let trailer_index = last_position_of_sequence(&self.raw, TRAILER_KEYWORD)
+            .ok_or(Error::Syntax("Could not find trailer keyword", "".into()))?;
+        let raw = &self.raw[trailer_index + TRAILER_KEYWORD.len()..];
+
+        let (obj, _raw) = parse_object_until_keyword(raw, STARTXREF_KEYWORD)?;
+
+        Ok(obj)
     }
 }
 
@@ -160,5 +172,47 @@ mod tests {
             generation: 0,
         };
         assert_eq!(file.indirect_object_offset(reference), Ok(12421));
+    }
+
+    #[test]
+    fn should_parse_trailer() {
+        let file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
+        let trailer = file.trailer().unwrap();
+
+        let mut expected = HashMap::<Cow<[u8]>, Object>::new();
+        expected.insert(Cow::Borrowed(b"Size"), Object::Integer(20));
+        expected.insert(
+            Cow::Borrowed(b"Root"),
+            Object::Indirect(IndirectRef {
+                number: 18,
+                generation: 0,
+            }),
+        );
+        expected.insert(
+            Cow::Borrowed(b"Info"),
+            Object::Indirect(IndirectRef {
+                number: 19,
+                generation: 0,
+            }),
+        );
+        expected.insert(
+            Cow::Borrowed(b"ID"),
+            Object::Array(vec![
+                Object::String(Cow::Borrowed(&[
+                    0x67, 0x2D, 0xFA, 0x4F, 0x7E, 0xF7, 0x2C, 0x74, 0x08, 0xCF, 0x44, 0xB9, 0x85,
+                    0x04, 0x9C, 0x31,
+                ])),
+                Object::String(Cow::Borrowed(&[
+                    0x67, 0x2D, 0xFA, 0x4F, 0x7E, 0xF7, 0x2C, 0x74, 0x08, 0xCF, 0x44, 0xB9, 0x85,
+                    0x04, 0x9C, 0x31,
+                ])),
+            ]),
+        );
+        expected.insert(
+            Cow::Borrowed(b"DocChecksum"),
+            Object::Name(Cow::Borrowed(b"55569C181E425D18F7ED4931B469769A")),
+        );
+
+        assert_eq!(trailer, Object::Dictionary(expected));
     }
 }
