@@ -228,6 +228,26 @@ mod tests {
             Object::Name(Cow::Borrowed(b"DictionaryExample")),
         );
         expected.insert(Cow::Borrowed(b"Version"), Object::Real(0.01));
+        expected.insert(Cow::Borrowed(b"IntegerItem"), Object::Integer(12));
+        expected.insert(
+            Cow::Borrowed(b"StringItem"),
+            Object::String(Cow::Borrowed(b"a string")),
+        );
+        expected.insert(Cow::Borrowed(b"Subdictionary"), {
+            let mut subdict = HashMap::<Cow<[u8]>, Object>::new();
+            subdict.insert(Cow::Borrowed(b"Item1"), Object::Real(0.4));
+            subdict.insert(Cow::Borrowed(b"Item2"), Object::Boolean(true));
+            subdict.insert(
+                Cow::Borrowed(b"LastItem"),
+                Object::String(Cow::Borrowed(b"not!")),
+            );
+            subdict.insert(
+                Cow::Borrowed(b"VeryLastItem"),
+                Object::String(Cow::Borrowed(b"OK")),
+            );
+            Object::Dictionary(subdict)
+        });
+
         assert_eq!(obj, Object::Dictionary(expected));
     }
 }
