@@ -1,4 +1,4 @@
-use crate::error::Error;
+use crate::error::{Error, Result};
 use crate::objects::IndirectRef;
 use crate::objects::Object;
 use crate::parsing::tokens::{parse_token, ParseResult, Token};
@@ -12,11 +12,12 @@ enum ParseStackEntry<'a> {
     BeginDictionary,
 }
 
+use ParseStackEntry::*;
+
 pub fn parse_object_until_keyword<'a>(
     mut raw: &'a [u8],
     end_keyword: &[u8],
 ) -> ParseResult<'a, Object<'a>> {
-    use ParseStackEntry::*;
     let mut stack = Vec::new();
 
     loop {
@@ -53,112 +54,20 @@ pub fn parse_object_until_keyword<'a>(
 
             // Array Objects
             Token::BeginArray => stack.push(BeginArray),
-            Token::EndArray => {
-                // Find the index of the most recent BeginArray
-                let start = stack.len()
-                    - stack
-                        .iter()
-                        .rev()
-                        .position(|e| e == &BeginArray)
-                        .ok_or(Error::Syntax("Could not find start of array", "".into()))?;
-                // Pop the array elements, in the right order
-                let entries = stack.drain(start..);
-                // Then unwrap them into objects
-                let mut array = Vec::with_capacity(entries.len());
-                for entry in entries {
-                    if let Obj(object) = entry {
-                        array.push(object);
-                    } else {
-                        return Err(Error::Syntax("Unrecognized token inside array", "".into()));
-                    }
-                }
-                // Pop the BeginArray
-                stack.pop();
-                // Push an Obj
-                stack.push(Obj(Object::Array(array)));
-            }
+            Token::EndArray => process_array(&mut stack)?,
 
             // Dictionary Objects
             Token::BeginDictionary => stack.push(BeginDictionary),
-            Token::EndDictionary => {
-                // Find the index of the most recent BeginDictionary
-                let start = stack.len()
-                    - stack
-                        .iter()
-                        .rev()
-                        .position(|e| e == &BeginDictionary)
-                        .ok_or(Error::Syntax(
-                            "Could not find start of dictionary",
-                            format!("{:?}", stack),
-                        ))?;
-                // Pop the dictionary elements, in the right order
-                let mut entries = stack.drain(start..);
-                // Then unwrap them into key/value pairs
-                let mut dict =
-                    HashMap::<Cow<'a, [u8]>, Object<'a>>::with_capacity(entries.len() / 2);
-                while let Some(entry) = entries.next() {
-                    let key = if let Obj(Object::Name(key)) = entry {
-                        key
-                    } else {
-                        return Err(Error::Syntax(
-                            "Misplaced token inside dictionary",
-                            format!("{:?}", entry),
-                        ));
-                    };
-
-                    let value = if let Some(Obj(value)) = entries.next() {
-                        value
-                    } else {
-                        return Err(Error::Syntax(
-                            "Could not find value in dictionary",
-                            "".into(),
-                        ));
-                    };
-
-                    dict.insert(key, value);
-                }
-                // Explicitly drop entries so that we can mutate the stack again
-                // This was not required for array parsing as there it was
-                // consumed by the for loop
-                drop(entries);
-                // Pop the BeginDictionary
-                stack.pop();
-                // Push an Obj
-                stack.push(Obj(Object::Dictionary(dict)));
-            }
+            Token::EndDictionary => process_dictionary(&mut stack)?,
 
             // Stream Objects
-            Token::Stream(stream) => {
-                if let Some(Obj(Object::Dictionary(dict))) = stack.pop() {
-                    stack.push(Obj(Object::Stream(dict, stream)));
-                } else {
-                    return Err(Error::Syntax("Could not find stream dictionary", "".into()));
-                }
-            }
+            Token::Stream(stream) => process_stream(&mut stack, stream)?,
 
             // Null Object
             Token::Keyword(b"null") => stack.push(Obj(Object::Null)),
 
             // Indirect Objects
-            Token::Keyword(b"R") => {
-                // The order is reversed as they are being popped from a stack
-                if let (
-                    Some(Obj(Object::Integer(generation))),
-                    Some(Obj(Object::Integer(number))),
-                ) = (stack.pop(), stack.pop())
-                {
-                    // TODO: error handling for integer casts?
-                    stack.push(Obj(Object::Indirect(IndirectRef {
-                        number: number as u32,
-                        generation: generation as u16,
-                    })));
-                } else {
-                    return Err(Error::Syntax(
-                        "Could not find integers for indirect object",
-                        "".into(),
-                    ));
-                }
-            }
+            Token::Keyword(b"R") => process_indirect(&mut stack)?,
 
             // Other
             Token::Keyword(keyword) => {
@@ -169,6 +78,113 @@ pub fn parse_object_until_keyword<'a>(
             }
         }
     }
+}
+
+fn process_array(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
+    // Find the index of the most recent BeginArray
+    let start = stack.len()
+        - stack
+            .iter()
+            .rev()
+            .position(|e| e == &BeginArray)
+            .ok_or(Error::Syntax("Could not find start of array", "".into()))?;
+    // Pop the array elements, in the right order
+    let entries = stack.drain(start..);
+    // Then unwrap them into objects
+    let mut array = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if let Obj(object) = entry {
+            array.push(object);
+        } else {
+            return Err(Error::Syntax("Unrecognized token inside array", "".into()));
+        }
+    }
+    // Pop the BeginArray
+    stack.pop();
+    // Push an Obj
+    stack.push(Obj(Object::Array(array)));
+
+    Ok(())
+}
+
+fn process_dictionary<'a>(stack: &mut Vec<ParseStackEntry<'a>>) -> Result<()> {
+    // Find the index of the most recent BeginDictionary
+    let start = stack.len()
+        - stack
+            .iter()
+            .rev()
+            .position(|e| e == &BeginDictionary)
+            .ok_or(Error::Syntax(
+                "Could not find start of dictionary",
+                format!("{:?}", stack),
+            ))?;
+    // Pop the dictionary elements, in the right order
+    let mut entries = stack.drain(start..);
+    // Then unwrap them into key/value pairs
+    let mut dict = HashMap::<Cow<'a, [u8]>, Object<'a>>::with_capacity(entries.len() / 2);
+    while let Some(entry) = entries.next() {
+        let key = if let Obj(Object::Name(key)) = entry {
+            key
+        } else {
+            return Err(Error::Syntax(
+                "Misplaced token inside dictionary",
+                format!("{:?}", entry),
+            ));
+        };
+
+        let value = if let Some(Obj(value)) = entries.next() {
+            value
+        } else {
+            return Err(Error::Syntax(
+                "Could not find value in dictionary",
+                "".into(),
+            ));
+        };
+
+        dict.insert(key, value);
+    }
+    // Explicitly drop entries so that we can mutate the stack again
+    // This was not required for array parsing as there it was
+    // consumed by the for loop
+    drop(entries);
+    // Pop the BeginDictionary
+    stack.pop();
+    // Push an Obj
+    stack.push(Obj(Object::Dictionary(dict)));
+
+    Ok(())
+}
+
+fn process_stream<'a>(stack: &mut Vec<ParseStackEntry<'a>>, stream: &'a [u8]) -> Result<()> {
+    // TODO: decode stream
+
+    if let Some(Obj(Object::Dictionary(dict))) = stack.pop() {
+        stack.push(Obj(Object::Stream(dict, stream)));
+    } else {
+        return Err(Error::Syntax("Could not find stream dictionary", "".into()));
+    }
+
+    Ok(())
+}
+
+fn process_indirect(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
+    // The order is reversed as they are being popped from a stack
+    if let (Some(Obj(Object::Integer(generation))), Some(Obj(Object::Integer(number)))) =
+        (stack.pop(), stack.pop())
+    {
+        // TODO: error handling for integer casts?
+        stack.push(Obj(Object::Indirect(IndirectRef {
+            number: number as u32,
+            generation: generation as u16,
+        })));
+    } else {
+        return Err(Error::Syntax(
+            "Could not find integers for indirect object",
+            "".into(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
