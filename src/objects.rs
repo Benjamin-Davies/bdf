@@ -18,7 +18,7 @@ pub enum Object<'a> {
     Name(Cow<'a, [u8]>),
     Array(Vec<Object<'a>>),
     Dictionary(HashMap<Cow<'a, [u8]>, Object<'a>>),
-    Stream(Box<Object<'a>>, Cow<'a, [u8]>),
+    Stream(HashMap<Cow<'a, [u8]>, Object<'a>>, &'a [u8]),
     Null,
     Indirect(IndirectRef),
 }
@@ -137,7 +137,38 @@ pub fn parse_object_until_keyword<'a>(
                 stack.push(Obj(Object::Dictionary(dict)));
             }
 
-            _ => todo!(),
+            // Stream Objects
+            Token::Stream(stream) => {
+                if let Some(Obj(Object::Dictionary(dict))) = stack.pop() {
+                    stack.push(Obj(Object::Stream(dict, stream)));
+                } else {
+                    return Err(Error::Syntax("Could not find stream dictionary"));
+                }
+            }
+
+            // Null Object
+            Token::Keyword(b"null") => stack.push(Obj(Object::Null)),
+
+            // Indirect Objects
+            Token::Keyword(b"R") => {
+                // The order is reversed as they are being popped from a stack
+                if let (
+                    Some(Obj(Object::Integer(generation))),
+                    Some(Obj(Object::Integer(number))),
+                ) = (stack.pop(), stack.pop())
+                {
+                    // TODO: error handling for integer casts?
+                    stack.push(Obj(Object::Indirect(IndirectRef {
+                        number: number as u32,
+                        generation: generation as u16,
+                    })));
+                } else {
+                    return Err(Error::Syntax("Could not find integers for indirect object"));
+                }
+            }
+
+            // Other
+            Token::Keyword(_) => return Err(Error::Syntax("Unrecognized keyword")),
         }
     }
 }
@@ -249,5 +280,30 @@ mod tests {
         });
 
         assert_eq!(obj, Object::Dictionary(expected));
+    }
+
+    #[test]
+    fn should_parse_stream() {
+        let raw = b"<< >> stream\nHello, world!\nendstream end ";
+        let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
+        assert_eq!(obj, Object::Stream(HashMap::new(), b"Hello, world!\n"));
+    }
+
+    #[test]
+    fn should_parse_null() {
+        let (obj, _raw) = parse_object_until_keyword(b"null end ", b"end").unwrap();
+        assert_eq!(obj, Object::Null);
+    }
+
+    #[test]
+    fn should_parse_indirect() {
+        let (obj, _raw) = parse_object_until_keyword(b"12 0 R end ", b"end").unwrap();
+        assert_eq!(
+            obj,
+            Object::Indirect(IndirectRef {
+                number: 12,
+                generation: 0
+            })
+        );
     }
 }
