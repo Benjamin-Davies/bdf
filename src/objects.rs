@@ -17,7 +17,7 @@ pub enum Object<'a> {
     Name(Cow<'a, [u8]>),
     Array(Vec<Object<'a>>),
     Dictionary(HashMap<Cow<'a, [u8]>, Object<'a>>),
-    Stream(HashMap<Cow<'a, [u8]>, Object<'a>>, &'a [u8]),
+    Stream(Box<Object<'a>>, Cow<'a, [u8]>),
     Null,
     Indirect(IndirectRef),
 }
@@ -34,12 +34,59 @@ impl<'a> Index<&'a [u8]> for Object<'a> {
     }
 }
 
-impl<'a> Object<'a> {
-    pub fn index_array(&self, index: usize) -> &Object<'a> {
+impl<'a> IntoIterator for &'a Object<'a> {
+    type Item = &'a Object<'a>;
+    type IntoIter = ObjectIter<'a>;
+
+    fn into_iter(self) -> ObjectIter<'a> {
         if let Object::Array(array) = self {
-            &array.get(index).unwrap_or(&Object::Null)
+            ObjectIter::Array {
+                array: &array,
+                index: 0,
+            }
+        } else if self == &Object::Null {
+            ObjectIter::Single {
+                object: self,
+                consumed: true,
+            }
         } else {
-            &Object::Null
+            ObjectIter::Single {
+                object: self,
+                consumed: false,
+            }
+        }
+    }
+}
+
+pub enum ObjectIter<'a> {
+    Array {
+        array: &'a [Object<'a>],
+        index: usize,
+    },
+    Single {
+        object: &'a Object<'a>,
+        consumed: bool,
+    },
+}
+
+impl<'a> Iterator for ObjectIter<'a> {
+    type Item = &'a Object<'a>;
+
+    fn next(&mut self) -> Option<&'a Object<'a>> {
+        match self {
+            Self::Array { array, index } => {
+                let res = array.get(*index);
+                *index += 1;
+                res
+            }
+            Self::Single { object, consumed } => {
+                if *consumed {
+                    None
+                } else {
+                    *consumed = true;
+                    Some(object)
+                }
+            }
         }
     }
 }

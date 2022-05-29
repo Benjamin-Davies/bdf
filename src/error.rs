@@ -12,6 +12,7 @@ pub enum Error {
     ParseFloat(ParseFloatError),
     ParseInt(ParseIntError),
     Syntax(&'static str, String),
+    UnknownFilter(String),
 }
 
 impl From<io::Error> for Error {

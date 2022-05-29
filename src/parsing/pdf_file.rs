@@ -165,6 +165,7 @@ impl PdfFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Borrow;
 
     #[test]
     fn should_read_raw() {
@@ -250,7 +251,9 @@ mod tests {
         let pages = file.resolve(&root[b"Pages"]).unwrap();
         assert_eq!(pages[b"Type"], Object::Name(Cow::Borrowed(b"Pages")));
 
-        let page = file.resolve(&pages[b"Kids"].index_array(0)).unwrap();
+        let page = file
+            .resolve(pages[b"Kids"].into_iter().next().unwrap())
+            .unwrap();
         assert_eq!(page[b"Type"], Object::Name(Cow::Borrowed(b"Page")));
         assert_eq!(
             page[b"Contents"],
@@ -259,5 +262,23 @@ mod tests {
                 generation: 0
             })
         );
+    }
+
+    #[test]
+    fn should_parse_page_content() {
+        let mut file = PdfFile::read_file("./examples/hello-world.pdf").unwrap();
+        file.load_xref_table().unwrap();
+
+        let stream = file
+            .resolve(&Object::Indirect(IndirectRef {
+                number: 2,
+                generation: 0,
+            }))
+            .unwrap();
+        if let Object::Stream(_dict, contents) = stream.borrow() {
+            assert_eq!(&String::from_utf8_lossy(contents)[..10], "0.1 w\n/Art");
+        } else {
+            unreachable!();
+        }
     }
 }
