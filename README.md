@@ -2,6 +2,8 @@
 
 Ben's PDF Viewer
 
+I wanted to see how feasible it would be to implement a PDF viewer from scratch. At the moment this is a massive WIP, with just basic file parsing implemented.
+
 # References
 
 Adobe Systems Incorporated. (2008). _Document management - Portable document
