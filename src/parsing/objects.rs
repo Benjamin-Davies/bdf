@@ -4,6 +4,7 @@ use crate::objects::Object;
 use crate::parsing::tokens::{parse_token, ParseResult, Token};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::vec::Drain;
 
 #[derive(Debug, PartialEq)]
 pub enum ParseStackEntry<'a> {
@@ -14,22 +15,67 @@ pub enum ParseStackEntry<'a> {
 
 use ParseStackEntry::*;
 
+pub struct ParseStack<'a> {
+    inner: Vec<ParseStackEntry<'a>>,
+}
+
+impl<'a> ParseStack<'a> {
+    pub fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+
+    pub fn push(&mut self, entry: ParseStackEntry<'a>) {
+        self.inner.push(entry)
+    }
+
+    pub fn pop(&mut self) -> Option<ParseStackEntry<'a>> {
+        self.inner.pop()
+    }
+
+    pub fn pop_obj(&mut self) -> Result<Object<'a>> {
+        if let Some(Obj(obj)) = self.pop() {
+            Ok(obj)
+        } else {
+            Err(Error::Syntax("Could not pop argument", "".into()))
+        }
+    }
+
+    pub fn pop_back_to(
+        &mut self,
+        entry: &ParseStackEntry<'a>,
+    ) -> Result<Drain<ParseStackEntry<'a>>> {
+        // Find the index of the most recent BeginArray
+        let start = self.inner.len()
+            - self
+                .inner
+                .iter()
+                .rev()
+                .position(|e| e == entry)
+                .ok_or(Error::Syntax(
+                    "Could not find start of structure",
+                    format!("{:?}", entry),
+                ))?
+            - 1;
+        // Pop the array elements, in the right order
+        let mut entries = self.inner.drain(start..);
+        // Skip the starting marker
+        entries.next();
+        // Return the iterator
+        Ok(entries)
+    }
+}
+
 pub fn parse_object_until_keyword<'a>(
     mut raw: &'a [u8],
     end_keyword: &'static [u8],
 ) -> ParseResult<'a, Object<'a>> {
     let mut res = None;
-    let mut end_handler = |stack: &mut Vec<ParseStackEntry<'a>>| {
-        if let Some(ParseStackEntry::Obj(obj)) = stack.pop() {
-            res = Some(obj);
-        }
+    let mut end_handler = |stack: &mut ParseStack<'a>| {
+        res = Some(stack.pop_obj()?);
         Ok(false)
     };
 
-    let mut keyword_handlers = HashMap::<
-        &'static [u8],
-        &mut (dyn FnMut(&mut Vec<ParseStackEntry<'a>>) -> Result<bool>),
-    >::new();
+    let mut keyword_handlers: KeywordHandlerMap = HashMap::new();
     keyword_handlers.insert(end_keyword, &mut end_handler);
 
     ((), raw) = parse(raw, &mut keyword_handlers)?;
@@ -38,14 +84,14 @@ pub fn parse_object_until_keyword<'a>(
     Ok((res.unwrap(), raw))
 }
 
-pub fn parse<'a>(
+pub type KeywordHandlerMap<'a, 'b> =
+    HashMap<&'static [u8], &'b mut (dyn FnMut(&mut ParseStack<'a>) -> Result<bool>)>;
+
+pub fn parse<'a, 'b>(
     mut raw: &'a [u8],
-    keyword_handlers: &mut HashMap<
-        &'static [u8],
-        &mut (dyn FnMut(&mut Vec<ParseStackEntry<'a>>) -> Result<bool>),
-    >,
+    keyword_handlers: &mut KeywordHandlerMap<'a, 'b>,
 ) -> ParseResult<'a, ()> {
-    let mut stack = Vec::new();
+    let mut stack = ParseStack::new();
     let mut running = true;
 
     while running {
@@ -104,16 +150,9 @@ pub fn parse<'a>(
     Ok(((), raw))
 }
 
-fn process_array(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
-    // Find the index of the most recent BeginArray
-    let start = stack.len()
-        - stack
-            .iter()
-            .rev()
-            .position(|e| e == &BeginArray)
-            .ok_or(Error::Syntax("Could not find start of array", "".into()))?;
+fn process_array(stack: &mut ParseStack) -> Result<()> {
     // Pop the array elements, in the right order
-    let entries = stack.drain(start..);
+    let entries = stack.pop_back_to(&BeginArray)?;
     // Then unwrap them into objects
     let mut array = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -123,27 +162,15 @@ fn process_array(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
             return Err(Error::Syntax("Unrecognized token inside array", "".into()));
         }
     }
-    // Pop the BeginArray
-    stack.pop();
     // Push an Obj
     stack.push(Obj(Object::Array(array)));
 
     Ok(())
 }
 
-fn process_dictionary<'a>(stack: &mut Vec<ParseStackEntry<'a>>) -> Result<()> {
-    // Find the index of the most recent BeginDictionary
-    let start = stack.len()
-        - stack
-            .iter()
-            .rev()
-            .position(|e| e == &BeginDictionary)
-            .ok_or(Error::Syntax(
-                "Could not find start of dictionary",
-                format!("{:?}", stack),
-            ))?;
+fn process_dictionary<'a>(stack: &mut ParseStack<'a>) -> Result<()> {
     // Pop the dictionary elements, in the right order
-    let mut entries = stack.drain(start..);
+    let mut entries = stack.pop_back_to(&BeginDictionary)?;
     // Then unwrap them into key/value pairs
     let mut dict = HashMap::<Cow<'a, [u8]>, Object<'a>>::with_capacity(entries.len() / 2);
     while let Some(entry) = entries.next() {
@@ -171,43 +198,39 @@ fn process_dictionary<'a>(stack: &mut Vec<ParseStackEntry<'a>>) -> Result<()> {
     // This was not required for array parsing as there it was
     // consumed by the for loop
     drop(entries);
-    // Pop the BeginDictionary
-    stack.pop();
     // Push an Obj
     stack.push(Obj(Object::Dictionary(dict)));
 
     Ok(())
 }
 
-fn process_stream<'a>(stack: &mut Vec<ParseStackEntry<'a>>, stream: &'a [u8]) -> Result<()> {
-    if let Some(Obj(dict)) = stack.pop() {
-        let mut stream = Cow::Borrowed(stream);
+fn process_stream<'a>(stack: &mut ParseStack<'a>, stream: &'a [u8]) -> Result<()> {
+    let dict = stack.pop_obj()?;
+    let mut stream = Cow::Borrowed(stream);
 
-        for filter in &dict[b"Filter"] {
-            match filter {
-                Object::Name(name) if &name as &[u8] == b"FlateDecode" => {
-                    stream = inflate::inflate_bytes_zlib(&stream).unwrap().into();
-                }
-                Object::Name(name) => {
-                    return Err(Error::UnknownFilter(String::from_utf8_lossy(name).into()))
-                }
-                _ => return Err(Error::UnknownFilter(format!("{:?}", filter))),
+    for filter in &dict[b"Filter"] {
+        match filter {
+            Object::Name(name) if &name as &[u8] == b"FlateDecode" => {
+                stream = inflate::inflate_bytes_zlib(&stream).unwrap().into();
             }
+            Object::Name(name) => {
+                return Err(Error::UnknownFilter(String::from_utf8_lossy(name).into()))
+            }
+            _ => return Err(Error::UnknownFilter(format!("{:?}", filter))),
         }
-
-        stack.push(Obj(Object::Stream(dict.into(), stream)));
-    } else {
-        return Err(Error::Syntax("Could not find stream dictionary", "".into()));
     }
+
+    stack.push(Obj(Object::Stream(dict.into(), stream)));
 
     Ok(())
 }
 
-fn process_indirect(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
+fn process_indirect(stack: &mut ParseStack) -> Result<()> {
     // The order is reversed as they are being popped from a stack
-    if let (Some(Obj(Object::Integer(generation))), Some(Obj(Object::Integer(number)))) =
-        (stack.pop(), stack.pop())
-    {
+    let generation = stack.pop_obj()?;
+    let number = stack.pop_obj()?;
+
+    if let (Object::Integer(number), Object::Integer(generation)) = (number, generation) {
         // TODO: error handling for integer casts?
         stack.push(Obj(Object::Indirect(IndirectRef {
             number: number as u32,
@@ -323,9 +346,15 @@ mod tests {
 
     #[test]
     fn should_parse_stream() {
-        // let raw = b"<< >> stream\nHello, world!\nendstream end ";
-        // let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
-        // assert_eq!(obj, Object::Stream(HashMap::new(), Cow::Borrowed(b"Hello, world!\n")));
+        let raw = b"<< >> stream\nHello, world!\nendstream end ";
+        let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
+        assert_eq!(
+            obj,
+            Object::Stream(
+                Box::new(Object::Dictionary(HashMap::new())),
+                Cow::Borrowed(b"Hello, world!\n")
+            )
+        );
     }
 
     #[test]
