@@ -1,6 +1,7 @@
 use crate::error::{Error, Result};
 use crate::objects::IndirectRef;
 use crate::objects::Object;
+use crate::parsing::keywords::OBJ_KEYWORD;
 use crate::parsing::tokens::{parse_token, ParseResult, Token};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -68,20 +69,32 @@ impl<'a> ParseStack<'a> {
 pub fn parse_object_until_keyword<'a>(
     mut raw: &'a [u8],
     end_keyword: &'static [u8],
-) -> ParseResult<'a, Object<'a>> {
-    let mut res = None;
-    let mut end_handler = |stack: &mut ParseStack<'a>| {
-        res = Some(stack.pop_obj()?);
+) -> ParseResult<'a, (Option<IndirectRef>, Object<'a>)> {
+    let mut indirect = None;
+    let mut obj_handler = |stack: &mut ParseStack<'a>| -> Result<bool> {
+        process_indirect(stack)?;
+        if let Object::Indirect(ind) = stack.pop_obj()? {
+            indirect = Some(ind);
+        } else {
+            unreachable!();
+        }
+        Ok(true)
+    };
+
+    let mut object = None;
+    let mut end_handler = |stack: &mut ParseStack<'a>| -> Result<bool> {
+        object = Some(stack.pop_obj()?);
         Ok(false)
     };
 
     let mut keyword_handlers: KeywordHandlerMap = HashMap::new();
+    keyword_handlers.insert(OBJ_KEYWORD, &mut obj_handler);
     keyword_handlers.insert(end_keyword, &mut end_handler);
 
     ((), raw) = parse(raw, &mut keyword_handlers)?;
 
-    // TODO: Error condition?
-    Ok((res.unwrap(), raw))
+    let object = object.ok_or_else(|| Error::Syntax("Did not encounter end keyword", "".into()))?;
+    Ok(((indirect, object), raw))
 }
 
 pub type KeywordHandlerMap<'a, 'b> =
@@ -154,16 +167,17 @@ fn process_array(stack: &mut ParseStack) -> Result<()> {
     // Pop the array elements, in the right order
     let entries = stack.pop_back_to(&BeginArray)?;
     // Then unwrap them into objects
-    let mut array = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if let Obj(object) = entry {
-            array.push(object);
-        } else {
-            return Err(Error::Syntax("Unrecognized token inside array", "".into()));
-        }
-    }
+    let objects = entries
+        .map(|entry| {
+            if let Obj(object) = entry {
+                Ok(object)
+            } else {
+                Err(Error::Syntax("Unrecognized token inside array", "".into()))
+            }
+        })
+        .collect::<Result<Vec<Object>>>()?;
     // Push an Obj
-    stack.push(Obj(Object::Array(array)));
+    stack.push(Obj(Object::Array(objects)));
 
     Ok(())
 }
@@ -252,40 +266,40 @@ mod tests {
 
     #[test]
     fn should_parse_boolean() {
-        let (obj, _raw) = parse_object_until_keyword(b"true end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"true end ", b"end").unwrap();
         assert_eq!(obj, Object::Boolean(true));
 
-        let (obj, _raw) = parse_object_until_keyword(b"false end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"false end ", b"end").unwrap();
         assert_eq!(obj, Object::Boolean(false));
     }
 
     #[test]
     fn should_parse_numeric() {
-        let (obj, _raw) = parse_object_until_keyword(b"42 end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"42 end ", b"end").unwrap();
         assert_eq!(obj, Object::Integer(42));
 
-        let (obj, _raw) = parse_object_until_keyword(b"+3.14 end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"+3.14 end ", b"end").unwrap();
         assert_eq!(obj, Object::Real(3.14));
     }
 
     #[test]
     fn should_parse_string() {
-        let (obj, _raw) = parse_object_until_keyword(b"(Hello, world!) end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"(Hello, world!) end ", b"end").unwrap();
         assert_eq!(obj, Object::String(Cow::Borrowed(b"Hello, world!")));
 
-        let (obj, _raw) = parse_object_until_keyword(b"<616263> end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"<616263> end ", b"end").unwrap();
         assert_eq!(obj, Object::String(Cow::Borrowed(b"abc")));
     }
 
     #[test]
     fn should_parse_name() {
-        let (obj, _raw) = parse_object_until_keyword(b"/Name end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"/Name end ", b"end").unwrap();
         assert_eq!(obj, Object::Name(Cow::Borrowed(b"Name")));
     }
 
     #[test]
     fn should_parse_array() {
-        let (obj, _raw) = parse_object_until_keyword(b"[1 2 3] end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"[1 2 3] end ", b"end").unwrap();
         assert_eq!(
             obj,
             Object::Array(vec![
@@ -295,7 +309,7 @@ mod tests {
             ])
         );
 
-        let (obj, _raw) = parse_object_until_keyword(b"[1[2]3] end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"[1[2]3] end ", b"end").unwrap();
         assert_eq!(
             obj,
             Object::Array(vec![
@@ -320,7 +334,7 @@ mod tests {
                                          /VeryLastItem (OK)
                                       >>
                     >> end ";
-        let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(raw, b"end").unwrap();
 
         assert_eq!(obj[b"Type"], Object::Name(Cow::Borrowed(b"Example")));
         assert_eq!(
@@ -347,7 +361,7 @@ mod tests {
     #[test]
     fn should_parse_stream() {
         let raw = b"<< >> stream\nHello, world!\nendstream end ";
-        let (obj, _raw) = parse_object_until_keyword(raw, b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(raw, b"end").unwrap();
         assert_eq!(
             obj,
             Object::Stream(
@@ -359,13 +373,33 @@ mod tests {
 
     #[test]
     fn should_parse_null() {
-        let (obj, _raw) = parse_object_until_keyword(b"null end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"null end ", b"end").unwrap();
         assert_eq!(obj, Object::Null);
     }
 
     #[test]
     fn should_parse_indirect() {
-        let (obj, _raw) = parse_object_until_keyword(b"12 0 R end ", b"end").unwrap();
+        let ((_, obj), _raw) = parse_object_until_keyword(b"12 0 R end ", b"end").unwrap();
+        assert_eq!(
+            obj,
+            Object::Indirect(IndirectRef {
+                number: 12,
+                generation: 0
+            })
+        );
+    }
+
+    #[test]
+    fn should_parse_obj_keyword() {
+        let ((ind, obj), _raw) =
+            parse_object_until_keyword(b"1 2 obj 12 0 R end ", b"end").unwrap();
+        assert_eq!(
+            ind,
+            Some(IndirectRef {
+                number: 1,
+                generation: 2,
+            })
+        );
         assert_eq!(
             obj,
             Object::Indirect(IndirectRef {

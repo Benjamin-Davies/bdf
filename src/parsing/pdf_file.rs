@@ -115,7 +115,7 @@ impl PdfFile {
             .ok_or(Error::Syntax("Could not find trailer keyword", "".into()))?;
         let raw = &self.raw[trailer_index + TRAILER_KEYWORD.len()..];
 
-        let (obj, _raw) = parse_object_until_keyword(raw, STARTXREF_KEYWORD)?;
+        let ((_, obj), _raw) = parse_object_until_keyword(raw, STARTXREF_KEYWORD)?;
 
         Ok(obj)
     }
@@ -130,33 +130,18 @@ impl PdfFile {
         let offset = self.indirect_object_offset(reference)?;
         let raw = &self.raw[offset..];
 
-        let (number, raw) = tokens::parse_number::<u32>(raw)?;
-        if number != reference.number {
-            return Err(Error::Syntax(
-                "Object number does not match number in xref table",
-                format!("{} vs. {}", number, reference.number),
-            ));
-        }
+        let ((ind, obj), _raw) = parse_object_until_keyword(raw, ENDOBJ_KEYWORD)?;
 
-        let (generation, raw) = tokens::parse_number::<u16>(raw)?;
-        if generation != reference.generation {
-            return Err(Error::Syntax(
-                "Object generation number does not match generation in xref table",
-                format!("{} vs. {}", generation, reference.generation),
-            ));
+        if let Some(ind) = ind {
+            if ind != reference {
+                return Err(Error::Syntax(
+                    "Object number and generation number do not match values in xref table",
+                    format!("{:?} vs. {:?}", ind, reference),
+                ));
+            }
+        } else {
+            return Err(Error::Syntax("Could not find obj prefix", "".into()));
         }
-
-        let ((), raw) = tokens::parse_whitespace(raw)?;
-        let (obj_keyword, raw) = tokens::parse_keyword(raw)?;
-        if obj_keyword != OBJ_KEYWORD {
-            eprintln!("{}", String::from_utf8_lossy(raw));
-            return Err(Error::Syntax(
-                "Could not find obj keyword",
-                String::from_utf8_lossy(obj_keyword).into(),
-            ));
-        }
-
-        let (obj, _raw) = parse_object_until_keyword(raw, ENDOBJ_KEYWORD)?;
 
         Ok(Cow::Owned(obj))
     }
