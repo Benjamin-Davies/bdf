@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 #[derive(Debug, PartialEq)]
-enum ParseStackEntry<'a> {
+pub enum ParseStackEntry<'a> {
     Obj(Object<'a>),
     BeginArray,
     BeginDictionary,
@@ -16,25 +16,47 @@ use ParseStackEntry::*;
 
 pub fn parse_object_until_keyword<'a>(
     mut raw: &'a [u8],
-    end_keyword: &[u8],
+    end_keyword: &'static [u8],
 ) -> ParseResult<'a, Object<'a>> {
-    let mut stack = Vec::new();
+    let mut res = None;
+    let mut end_handler = |stack: &mut Vec<ParseStackEntry<'a>>| {
+        if let Some(ParseStackEntry::Obj(obj)) = stack.pop() {
+            res = Some(obj);
+        }
+        Ok(false)
+    };
 
-    loop {
+    let mut keyword_handlers = HashMap::<
+        &'static [u8],
+        &mut (dyn FnMut(&mut Vec<ParseStackEntry<'a>>) -> Result<bool>),
+    >::new();
+    keyword_handlers.insert(end_keyword, &mut end_handler);
+
+    ((), raw) = parse(raw, &mut keyword_handlers)?;
+
+    // TODO: Error condition?
+    Ok((res.unwrap(), raw))
+}
+
+pub fn parse<'a>(
+    mut raw: &'a [u8],
+    keyword_handlers: &mut HashMap<
+        &'static [u8],
+        &mut (dyn FnMut(&mut Vec<ParseStackEntry<'a>>) -> Result<bool>),
+    >,
+) -> ParseResult<'a, ()> {
+    let mut stack = Vec::new();
+    let mut running = true;
+
+    while running {
         let (token, rest) = parse_token(raw)?;
         raw = rest;
 
         match token {
-            // End Keyword
-            Token::Keyword(k) if k == end_keyword => {
-                if let Some(Obj(object)) = stack.into_iter().next() {
-                    return Ok((object, raw));
-                } else {
-                    return Err(Error::Syntax(
-                        "Encountered end keyword without reading a full object",
-                        "".into(),
-                    ));
-                };
+            // Keyword Handlers
+            Token::Keyword(k) if keyword_handlers.contains_key(k) => {
+                let handler = keyword_handlers.get_mut(k).unwrap();
+                running = handler(&mut stack)?;
             }
 
             // Boolean Objects
@@ -78,6 +100,8 @@ pub fn parse_object_until_keyword<'a>(
             }
         }
     }
+
+    Ok(((), raw))
 }
 
 fn process_array(stack: &mut Vec<ParseStackEntry>) -> Result<()> {
