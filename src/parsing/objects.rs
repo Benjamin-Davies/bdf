@@ -43,18 +43,18 @@ impl<'a> ParseStack<'a> {
 
     pub fn pop_back_to(
         &mut self,
-        entry: &ParseStackEntry<'a>,
+        start_entry: &ParseStackEntry<'a>,
     ) -> Result<Drain<ParseStackEntry<'a>>> {
-        // Find the index of the most recent BeginArray
+        // Find the index of the most recent start_entry
         let start = self.inner.len()
             - self
                 .inner
                 .iter()
                 .rev()
-                .position(|e| e == entry)
+                .position(|e| e == start_entry)
                 .ok_or(Error::Syntax(
                     "Could not find start of structure",
-                    format!("{:?}", entry),
+                    format!("{:?}", start_entry),
                 ))?
             - 1;
         // Pop the array elements, in the right order
@@ -223,14 +223,11 @@ fn process_stream<'a>(stack: &mut ParseStack<'a>, stream: &'a [u8]) -> Result<()
     let mut stream = Cow::Borrowed(stream);
 
     for filter in &dict[b"Filter"] {
-        match filter {
-            Object::Name(name) if &name as &[u8] == b"FlateDecode" => {
+        match filter.as_name()?.as_ref() {
+            b"FlateDecode" => {
                 stream = inflate::inflate_bytes_zlib(&stream).unwrap().into();
             }
-            Object::Name(name) => {
-                return Err(Error::UnknownFilter(String::from_utf8_lossy(name).into()))
-            }
-            _ => return Err(Error::UnknownFilter(format!("{:?}", filter))),
+            name => return Err(Error::UnknownFilter(String::from_utf8_lossy(name).into())),
         }
     }
 
@@ -241,21 +238,14 @@ fn process_stream<'a>(stack: &mut ParseStack<'a>, stream: &'a [u8]) -> Result<()
 
 fn process_indirect(stack: &mut ParseStack) -> Result<()> {
     // The order is reversed as they are being popped from a stack
-    let generation = stack.pop_obj()?;
-    let number = stack.pop_obj()?;
+    let generation = stack.pop_obj()?.as_int()?;
+    let number = stack.pop_obj()?.as_int()?;
 
-    if let (Object::Integer(number), Object::Integer(generation)) = (number, generation) {
-        // TODO: error handling for integer casts?
-        stack.push(Obj(Object::Indirect(IndirectRef {
-            number: number as u32,
-            generation: generation as u16,
-        })));
-    } else {
-        return Err(Error::Syntax(
-            "Could not find integers for indirect object",
-            "".into(),
-        ));
-    }
+    // TODO: error handling for integer casts?
+    stack.push(Obj(Object::Indirect(IndirectRef {
+        number: number as u32,
+        generation: generation as u16,
+    })));
 
     Ok(())
 }

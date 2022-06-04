@@ -1,3 +1,5 @@
+use crate::error::{Error, Result};
+use std::borrow::Borrow;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ops::Index;
@@ -20,6 +22,39 @@ pub enum Object<'a> {
     Stream(Box<Object<'a>>, Cow<'a, [u8]>),
     Null,
     Indirect(IndirectRef),
+}
+
+impl<'a> Object<'a> {
+    // TODO: rest of as_... methods
+
+    pub fn as_int(&self) -> Result<usize> {
+        if let Object::Integer(int) = self {
+            Ok(*int)
+        } else {
+            Err(Error::Syntax("Expected int", format!("got {:?}", self)))
+        }
+    }
+
+    pub fn as_real(&self) -> Result<f64> {
+        if let Object::Real(real) = self {
+            Ok(*real)
+        } else {
+            Err(Error::Syntax("Expected real", format!("got {:?}", self)))
+        }
+    }
+
+    pub fn as_name(&'a self) -> Result<Cow<'a, [u8]>> {
+        if let Object::Name(name) = self {
+            // TODO: is there a simpler way to do this
+            let borrowed = match name {
+                Cow::Borrowed(inner) => Cow::Borrowed(inner.borrow()),
+                Cow::Owned(inner) => Cow::Borrowed(inner.borrow()),
+            };
+            Ok(borrowed)
+        } else {
+            Err(Error::Syntax("Expected name", format!("got {:?}", self)))
+        }
+    }
 }
 
 impl<'a> Index<&'a [u8]> for Object<'a> {
