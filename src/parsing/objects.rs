@@ -241,7 +241,6 @@ fn process_indirect(stack: &mut ParseStack) -> Result<()> {
     let generation = stack.pop_obj()?.as_int()?;
     let number = stack.pop_obj()?.as_int()?;
 
-    // TODO: error handling for integer casts?
     stack.push(Obj(Object::Indirect(IndirectRef {
         number: number as u32,
         generation: generation as u16,
