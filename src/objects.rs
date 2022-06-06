@@ -28,7 +28,7 @@ impl<'a> Object<'a> {
         if let Object::Boolean(boolean) = self {
             Ok(*boolean)
         } else {
-            Err(Error::Syntax("Expected bool", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected bool got {:?}", self)))
         }
     }
 
@@ -36,7 +36,7 @@ impl<'a> Object<'a> {
         if let Object::Integer(int) = self {
             Ok(*int)
         } else {
-            Err(Error::Syntax("Expected int", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected int got {:?}", self)))
         }
     }
 
@@ -44,7 +44,7 @@ impl<'a> Object<'a> {
         if let Object::Real(real) = self {
             Ok(*real)
         } else {
-            Err(Error::Syntax("Expected real", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected real got {:?}", self)))
         }
     }
 
@@ -52,7 +52,7 @@ impl<'a> Object<'a> {
         if let Object::String(string) = self {
             Ok(Cow::Borrowed(&string))
         } else {
-            Err(Error::Syntax("Expected string", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected string got {:?}", self)))
         }
     }
 
@@ -60,7 +60,7 @@ impl<'a> Object<'a> {
         if let Object::Name(name) = self {
             Ok(Cow::Borrowed(&name))
         } else {
-            Err(Error::Syntax("Expected name", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected name got {:?}", self)))
         }
     }
 
@@ -68,7 +68,7 @@ impl<'a> Object<'a> {
         if let Object::Array(array) = self {
             Ok(array)
         } else {
-            Err(Error::Syntax("Expected array", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected array got {:?}", self)))
         }
     }
 
@@ -76,7 +76,7 @@ impl<'a> Object<'a> {
         if let Object::Dictionary(dict) = self {
             Ok(dict)
         } else {
-            Err(Error::Syntax("Expected dict", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected dict got {:?}", self)))
         }
     }
 
@@ -84,7 +84,7 @@ impl<'a> Object<'a> {
         if let Object::Stream(dict, stream) = self {
             Ok((dict.as_dict()?, Cow::Borrowed(stream)))
         } else {
-            Err(Error::Syntax("Expected stream", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected stream got {:?}", self)))
         }
     }
 
@@ -92,7 +92,7 @@ impl<'a> Object<'a> {
         if let Object::Null = self {
             Ok(())
         } else {
-            Err(Error::Syntax("Expected null", format!("got {:?}", self)))
+            Err(Error::Type(format!("Expected null got {:?}", self)))
         }
     }
 
@@ -100,10 +100,7 @@ impl<'a> Object<'a> {
         if let Object::Indirect(ind) = self {
             Ok(*ind)
         } else {
-            Err(Error::Syntax(
-                "Expected indirect",
-                format!("got {:?}", self),
-            ))
+            Err(Error::Type(format!("Expected indirect got {:?}", self)))
         }
     }
 }

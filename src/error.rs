@@ -12,6 +12,7 @@ pub enum Error {
     ParseFloat(ParseFloatError),
     ParseInt(ParseIntError),
     Syntax(&'static str, String),
+    Type(String),
     UnknownFilter(String),
 }
 
